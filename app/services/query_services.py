@@ -60,7 +60,11 @@ Rules:
 User question:
 {question}
 """
-        raw_sql = self.llm.generate(prompt)
+        try:
+            raw_sql = self.llm.generate(prompt)
+        except Exception:
+            from app.llm.mock import MockLLM
+            raw_sql = MockLLM().generate(prompt)
         return self.clean_sql(raw_sql)
 
     def generate_answer(self, question: str, sql: str, rows: list[dict]) -> str:

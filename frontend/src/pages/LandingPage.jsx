@@ -113,7 +113,7 @@ function LandingPage({ user, onNavigateToSignIn, onNavigateToWorkspace, onLogout
 
             <div className="hero-actions">
               <button type="button" className="button primary hero-button" onClick={onNavigateToWorkspace}>Start Asking Free <span>→</span></button>
-              <button type="button" className="button secondary hero-button">Connect Database</button>
+              <button type="button" className="button secondary hero-button" onClick={onNavigateToWorkspace}>Connect Database</button>
             </div>
 
             <div className="hero-trust-row">
@@ -239,9 +239,9 @@ ORDER BY 1 DESC;`}</pre>
                     </div>
                   </div>
 
-                  <div className="chat-input">
+                  <div className="chat-input" onClick={onNavigateToWorkspace} style={{ cursor: 'pointer' }}>
                     <span>Ask QueryX anything about this schema...</span>
-                    <button type="button">→</button>
+                    <button type="button" onClick={onNavigateToWorkspace}>→</button>
                   </div>
                 </aside>
               </div>

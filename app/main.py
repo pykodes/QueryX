@@ -5,8 +5,6 @@ import sqlite3
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from app.sql_validator import validate_sql
@@ -14,13 +12,30 @@ from app.llm import get_llm
 from app.services import QueryService, SchemaService, ChartService
 
 
-app = FastAPI()
+app = FastAPI(title="QueryX API", version="1.0.0")
+
+# CORS CONFIGURATION
+# Allows frontend running on localhost or network IP to access the API directly
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        # Network IP — allows access from other devices on the same LAN
+        "http://192.168.29.170:5173",
+        "*",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # PATH CONFIGURATION
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "database" / "company.db"
-FRONTEND_DIR = BASE_DIR / "frontend"
 
 # MODULE-LEVEL SERVICE INSTANCES
 
@@ -183,6 +198,7 @@ def process_question(question: str, provider: str | None = None) -> dict:
 # API ROUTES
 
 @app.post("/ask", response_model=QueryResponse)
+@app.post("/api/ask", response_model=QueryResponse)
 def ask_database(request: QuestionRequest):
     result = process_question(request.question, request.provider)
 
@@ -195,6 +211,19 @@ def ask_database(request: QuestionRequest):
         "chart": result["chart"],
         "error": result["error"],
         "execution_time_ms": result["execution_time_ms"],
+    }
+
+
+@app.get("/api/sample-questions")
+def get_sample_questions():
+    return {
+        "questions": [
+            "Who are the highest paid employees?",
+            "What is the average salary by department?",
+            "What is the employee distribution across work locations?",
+            "List all employees in engineering",
+            "Show total salary expense by department",
+        ]
     }
 
 
@@ -267,18 +296,21 @@ def get_schema():
         }
 
 
-# FRONTEND WEB UI SERVING
+# DEDICATED BACKEND API ROOT
 
-if FRONTEND_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-
-    @app.get("/")
-    def serve_index():
-        index_file = FRONTEND_DIR / "index.html"
-        if index_file.exists():
-            return FileResponse(str(index_file))
-        return {"message": "QueryX backend is running. Frontend index.html not found."}
-else:
-    @app.get("/")
-    def home():
-        return {"message": "QueryX backend is running"}
+@app.get("/")
+def root():
+    return {
+        "status": "online",
+        "service": "QueryX Backend API",
+        "version": "1.0.0",
+        "docs_url": "/docs",
+        "endpoints": {
+            "health": "/api/health",
+            "schema": "/api/schema",
+            "ask": "/api/ask",
+            "sample_questions": "/api/sample-questions",
+            "employees_test": "/employees-test",
+            "database_test": "/database-test",
+        },
+    }

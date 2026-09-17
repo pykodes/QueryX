@@ -50,10 +50,13 @@ QueryX/
 │   ├── seed.sql              # 100 sample employee records
 │   └── README.md             # Database documentation
 │
-├── frontend/
-│   ├── index.html            # Modern responsive web dashboard
-│   ├── style.css             # Glassmorphism dark theme styling
-│   └── app.js                # Frontend API & Chart.js integration
+├── frontend/                 # Standalone React + Vite Frontend application
+│   ├── src/                  # React components, pages, services, styles
+│   │   ├── services/api.js   # Unified API client communicating with FastAPI
+│   │   ├── pages/            # Landing, Workspace, and Sign-in pages
+│   │   └── components/       # UI widgets, query editor, chart & table cards
+│   ├── vite.config.js        # Vite dev server configuration & /api proxy
+│   └── package.json          # Frontend npm scripts and dependencies
 │
 ├── tests/
 │   ├── test_sql_validator.py # SQL security tests
@@ -69,50 +72,76 @@ QueryX/
 
 ---
 
-## 🛠️ Quick Start
+## 🛠️ Quick Start (Running Frontend & Backend Separately)
 
-### 1. Set Up Virtual Environment
+QueryX is structured as a decoupled architecture:
+- **Backend API**: FastAPI running on `http://127.0.0.1:8000`
+- **Frontend App**: React + Vite running on `http://localhost:5173`
+
+The user accesses the application through the frontend (`http://localhost:5173`). Requests flow from the frontend to FastAPI backend, and data returns to the user.
+
+```
+[ User in Browser ] 
+        │
+        ▼
+[ Frontend: http://localhost:5173 ]
+        │  (POST /api/ask, GET /api/health)
+        ▼
+[ FastAPI Backend: http://127.0.0.1:8000 ]
+        │
+   SQLite & LLM
+        │
+        ▼
+[ Returned JSON -> Rendered Charts & Tables -> User ]
+```
+
+### 1. Terminal 1: Run Backend (FastAPI)
 
 ```powershell
-# Create virtual environment
-python -m venv .venv
+# From project root:
+.\.venv\Scripts\uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
-# Activate (Windows PowerShell)
-.\.venv\Scripts\Activate.ps1
-
-# Install dependencies
-pip install -r requirements.txt
+# Or simply run the helper script:
+.\run-backend.bat   # or .\run-backend.ps1
 ```
 
-### 2. Configure Environment Variables
+FastAPI backend will start at:
+- **API URL**: `http://127.0.0.1:8000`
+- **Interactive Swagger Docs**: `http://127.0.0.1:8000/docs`
 
-Copy the example configuration:
-```powershell
-cp .env.example .env
-```
+---
 
-Edit `.env` to add your API keys:
-```env
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-2.5-flash
-```
-*(Note: If no API key is set, QueryX automatically falls back to the built-in offline engine for common questions.)*
+### 2. Terminal 2: Run Frontend (React + Vite)
 
-### 3. Run the Application
+Open a second terminal window:
 
 ```powershell
-.\.venv\Scripts\uvicorn app.main:app --reload --port 8000
+# Navigate into the frontend folder:
+cd frontend
+
+# Start the Vite development server:
+npm run dev
+
+# (On Windows PowerShell if scripts are restricted, use: npm.cmd run dev)
+# Or simply run the helper script from project root:
+.\run-frontend.bat   # or .\run-frontend.ps1
 ```
 
-Open your browser and navigate to:
-**[http://localhost:8000](http://localhost:8000)**
+Frontend application will start at:
+- **Frontend App**: **[http://localhost:5173](http://localhost:5173)**
+
+---
+
+### 3. Accessing the Application
+
+Open **[http://localhost:5173](http://localhost:5173)** in your browser.
+Any question submitted in the workspace sends a request to `/api/ask` (proxied or connected to FastAPI), processes through the pipeline, and returns the generated SQL, query results, AI business summary, and interactive charts.
 
 ---
 
 ## 🧪 Running Tests
 
-Execute the complete test suite with pytest:
+Execute the complete backend test suite with pytest:
 
 ```powershell
 .\.venv\Scripts\pytest tests/ -v
