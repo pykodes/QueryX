@@ -1,12 +1,21 @@
+import re
+
+
 def validate_sql(sql: str):
+    # Check empty SQL
     if not sql or not sql.strip():
         return False, "SQL query cannot be empty"
 
-    query = sql.strip().lower()
+    query = sql.strip()
 
-    if not query.startswith("select"):
+    # Remove one final semicolon if present
+    query_without_final_semicolon = query[:-1].rstrip() if query.endswith(";") else query
+
+    # Only SELECT queries are allowed
+    if not re.match(r"^select\b", query_without_final_semicolon, re.IGNORECASE):
         return False, "Only SELECT queries are allowed"
 
+    # Dangerous SQL operations
     dangerous_keywords = [
         "insert",
         "update",
@@ -17,14 +26,19 @@ def validate_sql(sql: str):
         "create",
         "replace",
         "attach",
-        "detach"
+        "detach",
+        "pragma",
+        "vacuum",
     ]
 
     for keyword in dangerous_keywords:
-        if keyword in query:
+        pattern = rf"\b{keyword}\b"
+
+        if re.search(pattern, query_without_final_semicolon, re.IGNORECASE):
             return False, f"Forbidden SQL keyword: {keyword}"
 
-    if ";" in query[:-1]:
+    # Prevent multiple SQL statements
+    if ";" in query_without_final_semicolon:
         return False, "Multiple SQL statements are not allowed"
 
     return True, "SQL query is valid"
