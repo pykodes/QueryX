@@ -15,7 +15,7 @@ class GeminiLLM(BaseLLM):
             raise ValueError(
                 "GEMINI_API_KEY is not set. Please provide it or set it in .env"
             )
-        self.model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self.model = model or os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
         self.client = genai.Client(api_key=self.api_key)
 
     def generate(self, prompt: str) -> str:
