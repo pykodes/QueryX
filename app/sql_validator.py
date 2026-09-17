@@ -15,6 +15,10 @@ def validate_sql(sql: str):
     if not re.match(r"^select\b", query_without_final_semicolon, re.IGNORECASE):
         return False, "Only SELECT queries are allowed"
 
+    # Prevent multiple SQL statements
+    if ";" in query_without_final_semicolon:
+        return False, "Multiple SQL statements are not allowed"
+
     # Dangerous SQL operations
     dangerous_keywords = [
         "insert",
@@ -36,9 +40,5 @@ def validate_sql(sql: str):
 
         if re.search(pattern, query_without_final_semicolon, re.IGNORECASE):
             return False, f"Forbidden SQL keyword: {keyword}"
-
-    # Prevent multiple SQL statements
-    if ";" in query_without_final_semicolon:
-        return False, "Multiple SQL statements are not allowed"
 
     return True, "SQL query is valid"

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="QueryX - Intelligent enterprise database querying in plain English using modern LLMs and SQLite." />
+  <title>QueryX — Ask the Database in Plain English</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <!-- Chart.js CDN for interactive data visualization -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- Background Glow Accents -->
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <!-- Main Container -->
+  <div class="app-container">
+    <!-- Top Navigation -->
+    <header class="navbar">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">Query<span class="gradient-text">X</span></span>
+          <span class="brand-tagline">Ask Database in Plain English</span>
+        </div>
+      </div>
+
+      <div class="nav-controls">
+        <div class="status-pill" id="system-status">
+          <span class="status-dot online"></span>
+          <span id="status-text">Backend Connected</span>
+        </div>
+
+        <div class="provider-selector-wrap">
+          <label for="provider-select" class="sr-only">AI Engine</label>
+          <select id="provider-select" class="provider-dropdown">
+            <option value="gemini" selected>⚡ Gemini (Auto/Fallback)</option>
+            <option value="openai">🤖 OpenAI</option>
+            <option value="mock">🧪 Mock (Offline Fast)</option>
+          </select>
+        </div>
+
+        <button id="btn-schema-modal" class="btn-secondary" title="Inspect Database Schema">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M9 21V9"/></svg>
+          <span>Schema</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Hero / Query Input Section -->
+    <main class="main-content">
+      <section class="query-hero-card">
+        <div class="hero-header">
+          <h1>Query your enterprise data in <span class="gradient-text">natural language</span></h1>
+          <p>No SQL knowledge needed. Ask anything about employees, departments, salaries, and metrics.</p>
+        </div>
+
+        <form id="query-form" class="query-input-form">
+          <div class="input-wrapper">
+            <div class="input-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            </div>
+            <input 
+              type="text" 
+              id="question-input" 
+              class="query-input" 
+              placeholder="e.g. What is the average salary and employee count by department?" 
+              autocomplete="off" 
+              required 
+            />
+            <button type="button" id="btn-clear" class="btn-icon" title="Clear input" style="display:none;">
+              ✕
+            </button>
+            <button type="submit" id="btn-submit" class="btn-primary">
+              <span class="btn-text">Execute Query</span>
+              <div class="spinner" id="submit-spinner" style="display:none;"></div>
+            </button>
+          </div>
+        </form>
+
+        <!-- Sample Questions Chips -->
+        <div class="sample-queries-section">
+          <span class="sample-label">Try asking:</span>
+          <div class="chips-container" id="sample-chips">
+            <!-- Populated dynamically via JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Error Notification Banner -->
+      <div id="error-banner" class="alert-banner alert-error" style="display: none;">
+        <div class="alert-icon">⚠️</div>
+        <div class="alert-body">
+          <strong id="error-title">Query Error</strong>
+          <p id="error-message"></p>
+        </div>
+        <button class="alert-close" id="btn-close-error">✕</button>
+      </div>
+
+      <!-- Results Display Section -->
+      <section id="results-section" class="results-layout" style="display: none;">
+        <!-- Left / Upper Column: AI Summary & Generated SQL -->
+        <div class="results-left">
+          <!-- AI Answer Banner -->
+          <div class="card answer-card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="ai-badge">AI Synthesis</span>
+                <span class="execution-badge" id="metric-time">0 ms</span>
+                <span class="execution-badge" id="metric-rows">0 rows</span>
+              </div>
+            </div>
+            <p id="ai-answer-text" class="answer-text"></p>
+          </div>
+
+          <!-- SQL Inspection Card -->
+          <div class="card sql-card">
+            <div class="card-header">
+              <div class="card-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                <span>Generated SQL Query</span>
+                <span class="badge-safe">🛡️ Safe SELECT</span>
+              </div>
+              <button id="btn-copy-sql" class="btn-subtle" title="Copy SQL">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span id="copy-text">Copy</span>
+              </button>
+            </div>
+            <div class="sql-code-block">
+              <pre><code id="generated-sql-code"></code></pre>
+            </div>
+          </div>
+
+          <!-- Data Table Card -->
+          <div class="card table-card">
+            <div class="card-header">
+              <div class="card-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
+                <span>Result Records</span>
+              </div>
+              <div id="table-record-count" class="card-subtitle"></div>
+            </div>
+            <div class="table-container" id="table-container">
+              <table id="results-table" class="data-table">
+                <thead id="table-head"></thead>
+                <tbody id="table-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column: Visualization Chart -->
+        <div class="results-right" id="chart-panel">
+          <div class="card chart-card">
+            <div class="card-header">
+              <div class="card-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                <span id="chart-heading">Interactive Chart</span>
+              </div>
+            </div>
+            <div class="chart-wrapper">
+              <canvas id="results-chart"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Schema Explorer Modal -->
+    <div id="schema-modal" class="modal-backdrop" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>Database Schema Explorer</h3>
+          <button id="btn-close-schema" class="modal-close">✕</button>
+        </div>
+        <div class="modal-body" id="schema-content">
+          <div class="spinner"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <p>QueryX • Powered by FastAPI & SQLite • Dynamic Text-to-SQL Architecture</p>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
