@@ -5,9 +5,15 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field, field_validator
 
 from app.sql_validator import validate_sql
+from app.llm.gemini import GeminiLLM
+from app.services.schema_service import SchemaService
+from app.services.query_services import QueryService
 
 
 app = FastAPI()
+llm = GeminiLLM()
+schema_service = SchemaService()
+query_service = QueryService(llm, schema_service)
 
 # REQUEST MODEL
 
