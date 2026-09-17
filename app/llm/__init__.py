@@ -4,6 +4,7 @@ from app.llm.base import BaseLLM
 from app.llm.gemini import GeminiLLM
 from app.llm.openai import OpenAILLM
 from app.llm.mock import MockLLM
+from app.llm.groq import GroqLLM
 
 logger = logging.getLogger("queryx.llm")
 
@@ -39,6 +40,21 @@ def get_llm(provider: str | None = None) -> BaseLLM:
         else:
             logger.info("OPENAI_API_KEY not configured. Using MockLLM for local execution.")
             return MockLLM()
+    elif selected_provider == "groq":
+        api_key = os.getenv("GROQ_API_KEY")
+        if api_key:
+            try:
+                return GroqLLM()
+            except Exception as e:
+                logger.warning(
+                    f"Could not initialize GroqLLM ({e}), falling back to MockLLM."
+                )
+                return MockLLM()
+        else:
+            logger.info(
+                "GROQ_API_KEY not configured. Using MockLLM for local execution."
+            )
+            return MockLLM()
 
     elif selected_provider == "mock":
         return MockLLM()
@@ -48,4 +64,4 @@ def get_llm(provider: str | None = None) -> BaseLLM:
         return MockLLM()
 
 
-__all__ = ["BaseLLM", "GeminiLLM", "OpenAILLM", "MockLLM", "get_llm"]
+__all__ = ["BaseLLM", "GeminiLLM", "OpenAILLM", "GroqLLM", "MockLLM", "get_llm"]
