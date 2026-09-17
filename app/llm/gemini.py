@@ -16,9 +16,9 @@ class GeminiLLM(BaseLLM):
         )
 
     def generate(self, prompt: str) -> str:
-        response = self.client.models.generate_content(
+        interaction = self.client.interactions.create(
             model="gemini-3.6-flash",
             input=prompt
         )
 
-        return response.text
+        return interaction.output_text
