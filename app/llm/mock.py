@@ -75,5 +75,10 @@ class MockLLM(BaseLLM):
             if dept in q:
                 return f"SELECT employee_id, first_name, last_name, designation, salary FROM employees WHERE LOWER(department) LIKE '%{dept}%' LIMIT 10;"
 
-        # Generic fallback
-        return "SELECT employee_id, first_name, last_name, department, designation, salary FROM employees LIMIT 10;"
+        # Check for general employee listing intents
+        valid_query_keywords = ["show", "list", "get", "find", "all", "employee", "record", "table", "data", "who", "what", "where", "which"]
+        if any(kw in q for kw in valid_query_keywords):
+            return "SELECT employee_id, first_name, last_name, department, designation, salary FROM employees LIMIT 10;"
+
+        # Unrecognized / Invalid input fallback
+        return "INVALID"

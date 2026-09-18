@@ -129,7 +129,7 @@ def process_question(question: str, provider: str | None = None) -> dict:
                 "row_count": 0,
                 "answer": None,
                 "chart": None,
-                "error": "Failed to translate question to SQL.",
+                "error": "Invalid input. Please enter a valid database question.",
                 "execution_time_ms": round(elapsed, 2),
             }
 

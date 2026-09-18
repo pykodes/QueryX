@@ -56,6 +56,7 @@ Rules:
 3. Use sensible column aliasing and aggregations (e.g. COUNT, AVG, SUM, ROUND).
 4. Use LIMIT when querying many records unless aggregated.
 5. Return ONLY the raw SQL query. Do NOT provide explanations or wrap in markdown fences.
+6. If the input is gibberish, invalid non-sensical text, or completely unrelated to querying the database schema, respond with ONLY the word "INVALID". Do NOT generate any SQL.
 
 User question:
 {question}
@@ -65,7 +66,11 @@ User question:
         except Exception:
             from app.llm.mock import MockLLM
             raw_sql = MockLLM().generate(prompt)
-        return self.clean_sql(raw_sql)
+
+        cleaned_sql = self.clean_sql(raw_sql)
+        if not cleaned_sql or cleaned_sql.strip().upper() == "INVALID" or "INVALID" in cleaned_sql.strip().upper():
+            return ""
+        return cleaned_sql
 
     def generate_answer(self, question: str, sql: str, rows: list[dict]) -> str:
         """
