@@ -13,6 +13,28 @@ def test_api_health():
     assert data["database"] == "connected"
 
 
+def test_api_ask_compatibility_route():
+    response = client.post(
+        "/api/ask",
+        json={
+            "question": "Show all employees",
+            "provider": "mock",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["generated_sql"] is not None
+    assert data["error"] is None
+
+
+def test_api_sample_questions_route():
+    response = client.get("/api/sample-questions")
+    assert response.status_code == 200
+    data = response.json()
+    assert "questions" in data
+    assert len(data["questions"]) > 0
+
+
 def test_database_test_endpoint():
     response = client.get("/database-test")
     assert response.status_code == 200

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-function LandingPage({ user, onNavigateToSignIn, onNavigateToWorkspace, onLogout, theme, onToggleTheme }) {
+function LandingPage({ user, onNavigateToSignIn, onNavigateToWorkspace, onNavigateToProfile, onLogout, theme, onToggleTheme }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const userInitial = user?.initials || user?.fullName?.trim()?.charAt(0)?.toUpperCase() || 'Q'
@@ -64,8 +64,26 @@ function LandingPage({ user, onNavigateToSignIn, onNavigateToWorkspace, onLogout
 
                   {menuOpen && (
                     <div id="user-menu" className="nav-user-menu" role="menu" aria-label="User menu">
-                      <button type="button" className="nav-user-menu-item" onClick={() => setMenuOpen(false)}>Profile</button>
-                      <button type="button" className="nav-user-menu-item" onClick={() => setMenuOpen(false)}>Work</button>
+                      <button
+                        type="button"
+                        className="nav-user-menu-item"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          if (onNavigateToProfile) onNavigateToProfile()
+                        }}
+                      >
+                        Profile
+                      </button>
+                      <button
+                        type="button"
+                        className="nav-user-menu-item"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          if (onNavigateToProfile) onNavigateToProfile()
+                        }}
+                      >
+                        Work
+                      </button>
                       <button
                         type="button"
                         className="nav-user-menu-item danger"

@@ -1,10 +1,18 @@
 import os
 import logging
 from app.llm.base import BaseLLM
-from app.llm.gemini import GeminiLLM
-from app.llm.openai import OpenAILLM
 from app.llm.mock import MockLLM
 from app.llm.groq import GroqLLM
+
+try:
+    from app.llm.gemini import GeminiLLM
+except ModuleNotFoundError:  # pragma: no cover - optional dependency for local/offline mode
+    GeminiLLM = None
+
+try:
+    from app.llm.openai import OpenAILLM
+except ModuleNotFoundError:  # pragma: no cover - optional dependency for local/offline mode
+    OpenAILLM = None
 
 logger = logging.getLogger("queryx.llm")
 
@@ -18,6 +26,10 @@ def get_llm(provider: str | None = None) -> BaseLLM:
     selected_provider = (provider or os.getenv("LLM_PROVIDER", "gemini")).lower().strip()
 
     if selected_provider == "gemini":
+        if GeminiLLM is None:
+            logger.info("Gemini provider dependency is unavailable. Using MockLLM for local execution.")
+            return MockLLM()
+
         api_key = os.getenv("GEMINI_API_KEY")
         if api_key and api_key != "your_gemini_api_key_here":
             try:
@@ -30,6 +42,10 @@ def get_llm(provider: str | None = None) -> BaseLLM:
             return MockLLM()
 
     elif selected_provider == "openai":
+        if OpenAILLM is None:
+            logger.info("OpenAI provider dependency is unavailable. Using MockLLM for local execution.")
+            return MockLLM()
+
         api_key = os.getenv("OPENAI_API_KEY")
         if api_key and api_key != "your_openai_api_key_here":
             try:

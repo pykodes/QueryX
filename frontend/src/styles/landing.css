@@ -286,31 +286,55 @@ html[data-theme='dark'] body {
 }
 
 html[data-theme='dark'] .topbar {
-  background: rgba(7, 19, 25, 0.8);
+  background: rgba(7, 23, 34, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid rgba(132, 152, 179, 0.14);
 }
 
+html[data-theme='dark'] .brand-text {
+  color: #edf6ff;
+}
+
+html[data-theme='dark'] .nav-panel {
+  background: rgba(7, 23, 34, 0.98);
+  border-bottom: 1px solid rgba(143, 164, 191, 0.2);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.65);
+}
+
 html[data-theme='dark'] .nav-link {
-  color: #d6e6f7;
+  color: #cde2f7;
 }
 
 html[data-theme='dark'] .nav-link.active,
 html[data-theme='dark'] .nav-link:hover {
-  color: #8feaff;
+  color: #7ee7ff;
+  background: rgba(126, 231, 255, 0.1);
 }
 
 html[data-theme='dark'] .nav-signin,
-html[data-theme='dark'] .button.secondary,
-html[data-theme='dark'] .theme-switcher {
-  background: rgba(13, 24, 35, 0.96);
-  border-color: rgba(143, 164, 191, 0.18);
+html[data-theme='dark'] .button.secondary {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(143, 164, 191, 0.25);
   color: #edf6ff;
 }
 
+html[data-theme='dark'] .nav-signin:hover,
+html[data-theme='dark'] .button.secondary:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(143, 164, 191, 0.4);
+  color: #ffffff;
+}
+
+html[data-theme='dark'] .theme-switcher {
+  background: rgba(12, 24, 36, 0.95);
+  border-color: rgba(143, 164, 191, 0.22);
+}
+
 html[data-theme='dark'] .nav-user-menu {
-  background: rgba(9, 18, 28, 0.98);
+  background: rgba(9, 24, 36, 0.98);
   border-color: rgba(148, 163, 184, 0.18);
-  box-shadow: 0 18px 44px rgba(2, 6, 23, 0.52);
+  box-shadow: 0 18px 44px rgba(2, 6, 23, 0.6);
 }
 
 html[data-theme='dark'] .nav-user-menu-item {
@@ -322,12 +346,13 @@ html[data-theme='dark'] .nav-user-menu-item:hover {
 }
 
 html[data-theme='dark'] .theme-option {
-  color: #d6e6f7;
+  color: #94a3b8;
 }
 
 html[data-theme='dark'] .theme-option.active {
-  background: linear-gradient(135deg, #8ef1ff, #7ca8ff);
-  color: #06151d;
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
 }
 
 html[data-theme='dark'] .hero-badge,
@@ -1831,7 +1856,11 @@ html[data-theme='dark'] .monitor-card {
   }
 
   .nav-toggle {
-    display: inline-block;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
   }
 
   .nav-panel {
@@ -1840,25 +1869,82 @@ html[data-theme='dark'] .monitor-card {
     right: 0;
     top: 100%;
     display: none;
-    padding: 20px 18px;
-    background: rgba(255,255,255,0.96);
+    padding: 22px 24px;
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     border-bottom: 1px solid rgba(151, 162, 183, 0.2);
-    box-shadow: 0 16px 26px rgba(15, 23, 42, 0.08);
+    box-shadow: 0 18px 36px rgba(15, 23, 42, 0.12);
+    z-index: 50;
+  }
+
+  html[data-theme='dark'] .nav-panel {
+    background: #081724 !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(143, 164, 191, 0.22);
+    box-shadow: 0 24px 50px rgba(0, 0, 0, 0.85);
   }
 
   .nav-panel.is-open {
     display: block;
   }
 
-  .nav-links,
-  .nav-actions {
-    display: grid;
-    gap: 12px;
+  .nav-links {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 16px;
   }
 
-  .nav-signin, .nav-link, .nav-actions .button {
+  .nav-link {
+    display: block;
+    width: 100%;
+    padding: 10px 16px;
+    border-radius: 10px;
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+
+  html[data-theme='dark'] .nav-link {
+    color: #e2f0fd !important;
+  }
+
+  html[data-theme='dark'] .nav-link.active,
+  html[data-theme='dark'] .nav-link:hover {
+    color: #7ee7ff !important;
+    background: rgba(126, 231, 255, 0.12);
+  }
+
+  .nav-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(148, 163, 184, 0.16);
+  }
+
+  html[data-theme='dark'] .nav-actions {
+    border-top-color: rgba(143, 164, 191, 0.18);
+  }
+
+  .theme-switcher {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    padding: 4px;
+  }
+
+  .theme-option {
+    flex: 1;
+    text-align: center;
+    padding: 8px 12px;
+  }
+
+  .nav-signin, .nav-actions .button {
     width: 100%;
     justify-content: center;
+    text-align: center;
   }
 
   .enterprise-grid,

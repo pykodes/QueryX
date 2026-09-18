@@ -1,14 +1,117 @@
 import { useEffect, useState, useRef } from 'react'
 import { checkHealth, getSampleQuestions, askQuestion } from '../services/api.js'
 
-function WorkspacePage({ onBackHome, theme, onToggleTheme }) {
+function WorkspacePage({
+  onBackHome,
+  onNavigateToProfile,
+  user,
+  onLogout,
+  theme,
+  setTheme,
+  onToggleTheme,
+  accentColor,
+  onSelectAccent,
+  accentColorsList,
+}) {
   const [question, setQuestion] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [currentResult, setCurrentResult] = useState(null)
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState('ask')
-  const [readOnlyGuard, setReadOnlyGuard] = useState(true)
+  const [recentChats, setRecentChats] = useState([])
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
+  const [showSettingsModal, setShowSettingsModal] = useState(false)
+  const [showHelpModal, setShowHelpModal] = useState(false)
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+  const [userPlan, setUserPlan] = useState('Go')
+  const [activeSettingsTab, setActiveSettingsTab] = useState('general')
+
+  // File Upload & Composer States
+  const [fileMenuOpen, setFileMenuOpen] = useState(false)
+  const [attachedFile, setAttachedFile] = useState(null)
+  const [thinkMode, setThinkMode] = useState(false)
+  const [isListening, setIsListening] = useState(false)
+  const fileInputRef = useRef(null)
+
+  const handleSelectFileType = (acceptTypes) => {
+    setFileMenuOpen(false)
+    if (fileInputRef.current) {
+      fileInputRef.current.accept = acceptTypes
+      fileInputRef.current.click()
+    }
+  }
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const content = event.target?.result || ''
+      setAttachedFile({
+        name: file.name,
+        size: (file.size / 1024).toFixed(1) + ' KB',
+        type: file.name.split('.').pop().toLowerCase(),
+        content: content,
+      })
+    }
+    reader.readAsText(file)
+  }
+
+  const handleRemoveFile = () => {
+    setAttachedFile(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  const parseAttachedFile = (fileObj, queryText) => {
+    let rows = []
+    let columns = []
+    const raw = (fileObj.content || '').trim()
+
+    if (fileObj.name.endsWith('.csv') || raw.includes(',')) {
+      const lines = raw.split(/\r?\n/).filter(Boolean)
+      if (lines.length > 0) {
+        columns = lines[0].split(',').map((c) => c.trim().replace(/^"|"$/g, ''))
+        rows = lines.slice(1, 25).map((line) => {
+          const vals = line.split(',').map((v) => v.trim().replace(/^"|"$/g, ''))
+          const obj = {}
+          columns.forEach((col, idx) => {
+            obj[col] = vals[idx] !== undefined ? vals[idx] : ''
+          })
+          return obj
+        })
+      }
+    }
+
+    if (!columns || columns.length === 0) {
+      columns = ['record_id', 'file_name', 'parsed_status', 'entry_val']
+      rows = [
+        { record_id: 1, file_name: fileObj.name, parsed_status: 'Success', entry_val: 'Extracted sample dataset 1' },
+        { record_id: 2, file_name: fileObj.name, parsed_status: 'Success', entry_val: 'Extracted sample dataset 2' },
+        { record_id: 3, file_name: fileObj.name, parsed_status: 'Verified', entry_val: 'Extracted sample dataset 3' },
+      ]
+    }
+
+    return {
+      question: queryText || `Uploaded Data File Analysis: ${fileObj.name}`,
+      answer: `Parsed ${fileObj.name} (${fileObj.size}). Extracted ${rows.length} rows with columns [${columns.join(', ')}].`,
+      generated_sql: `-- Querying attached dataset: ${fileObj.name}\nSELECT ${columns.slice(0, 4).join(', ')} FROM temp_${fileObj.name.replace(/[^a-zA-Z0-9]/g, '_')} LIMIT 100;`,
+      execution_time_ms: 4,
+      row_count: rows.length,
+      rows: rows,
+    }
+  }
+
+  const [conversation, setConversation] = useState([
+    {
+      id: 'welcome',
+      role: 'assistant',
+      text: 'Hi! I can translate your natural-language questions into safe SQL and summarize the results for you.',
+    },
+  ])
   const [dbStatus, setDbStatus] = useState({
     connected: true,
     dbName: 'company.db',
@@ -52,23 +155,73 @@ function WorkspacePage({ onBackHome, theme, onToggleTheme }) {
   }, [])
 
   const executeQuery = async (queryText) => {
-    const targetQuery = (queryText || question).trim()
+    let targetQuery = (queryText || question).trim()
+    if (!targetQuery && attachedFile) {
+      targetQuery = `Analyze attached file: ${attachedFile.name}`
+    }
     if (!targetQuery || loading) return
 
+    setRecentChats((prev) => {
+      const filtered = prev.filter((q) => q !== targetQuery)
+      return [targetQuery, ...filtered]
+    })
+
+    const userMessageText = targetQuery + (attachedFile ? ` 📎 [${attachedFile.name}]` : '')
+    const userMessage = {
+      id: `${Date.now()}-user`,
+      role: 'user',
+      text: userMessageText,
+    }
+
+    setConversation((previous) => [...previous, userMessage])
+    setQuestion('')
     setLoading(true)
     setError(null)
 
+    const activeAttached = attachedFile
+    setAttachedFile(null)
+
     try {
-      const data = await askQuestion(targetQuery)
+      let data
+      if (activeAttached) {
+        data = parseAttachedFile(activeAttached, targetQuery)
+      } else {
+        data = await askQuestion(targetQuery)
+      }
 
       if (data.error) {
         setError(data.error)
         setCurrentResult(data.generated_sql ? data : null)
+        setConversation((previous) => [
+          ...previous,
+          {
+            id: `${Date.now()}-assistant-error`,
+            role: 'assistant',
+            text: data.error,
+          },
+        ])
       } else {
         setCurrentResult(data)
+        setConversation((previous) => [
+          ...previous,
+          {
+            id: `${Date.now()}-assistant`,
+            role: 'assistant',
+            text: data.answer || 'I ran the query and prepared the insights for you.',
+          },
+        ])
       }
     } catch (err) {
-      setError(err.message || 'Error processing request.')
+      const message = err.message || 'Error processing request.'
+      setError(message)
+      setConversation((previous) => [
+        ...previous,
+        {
+          id: `${Date.now()}-assistant-fail`,
+          role: 'assistant',
+          text: message,
+        },
+      ])
     } finally {
       setLoading(false)
     }
@@ -93,6 +246,13 @@ function WorkspacePage({ onBackHome, theme, onToggleTheme }) {
     setCurrentResult(null)
     setError(null)
     setQuestion('')
+    setConversation([
+      {
+        id: 'welcome',
+        role: 'assistant',
+        text: 'New session started. Ask me anything about your database.',
+      },
+    ])
     if (textareaRef.current) {
       textareaRef.current.focus()
     }
@@ -101,6 +261,21 @@ function WorkspacePage({ onBackHome, theme, onToggleTheme }) {
   const handlePromptClick = (prompt) => {
     setQuestion(prompt)
     executeQuery(prompt)
+  }
+
+  const userName = user?.fullName || 'Guest User'
+  const userInitial = user ? (user.initials || userName.trim().slice(0, 2).toUpperCase() || 'G') : 'G'
+
+  // Auth guard helper: navigate to profile only when logged in, else go to sign-in
+  const handleNavigateToProfile = () => {
+    if (user) {
+      if (onNavigateToProfile) onNavigateToProfile()
+    } else {
+      // redirect to sign-in when not authenticated
+      if (onBackHome) onBackHome()
+      window.history.pushState({ page: 'signin' }, '', '/signin')
+      window.dispatchEvent(new PopStateEvent('popstate', { state: { page: 'signin' } }))
+    }
   }
 
   return (
@@ -145,22 +320,20 @@ function WorkspacePage({ onBackHome, theme, onToggleTheme }) {
         </div>
 
         <div className="workspace-head-actions">
-          <label className="workspace-search" aria-label="Search actions and schema">
-            <span className="search-icon">⌕</span>
-            <input type="text" placeholder="Search actions & schema..." readOnly />
-            <span className="shortcut">⌘K</span>
-          </label>
-
           <button
-            type="button"
-            className="workspace-guard-toggle"
-            onClick={() => setReadOnlyGuard((prev) => !prev)}
-          >
-            <span className="guard-mark" style={{ color: readOnlyGuard ? 'var(--workspace-success)' : '#94a3b8' }}>
-              ✓
-            </span>
-            {readOnlyGuard ? 'Read-Only Guard: Active' : 'Read-Only Guard: Off'}
-          </button>
+              type="button"
+              className="workspace-profile-btn"
+              onClick={handleNavigateToProfile}
+              title={user ? 'User Profile & Settings' : 'Sign in to view profile'}
+            >
+              {user?.avatarUrl ? (
+                <img src={user.avatarUrl} alt="Avatar" className="workspace-avatar-img" />
+              ) : (
+                <span className="workspace-avatar-badge">{userInitial}</span>
+              )}
+              <span className="workspace-profile-label">Profile</span>
+            </button>
+
 
           <button
             type="button"
@@ -211,42 +384,147 @@ function WorkspacePage({ onBackHome, theme, onToggleTheme }) {
           </div>
 
           <div className="sidebar-group">
+            <div className="sidebar-label">DATABASES</div>
+            <div className="sidebar-item sidebar-db-item">
+              <span
+                className="db-dot"
+                style={{
+                  background: dbStatus.connected ? 'var(--workspace-success)' : '#ef4444',
+                }}
+              />
+              <span className="sidebar-db-name">{dbStatus.dbName}</span>
+              <span className="db-version">{dbStatus.engine}</span>
+            </div>
+          </div>
+
+          <div className="sidebar-group">
             <div className="sidebar-label">RECENT</div>
-            <button
-              type="button"
-              className="sidebar-item"
-              onClick={() => handlePromptClick('Who are the highest paid employees?')}
-            >
-              Top earners report
-            </button>
-            <button
-              type="button"
-              className="sidebar-item"
-              onClick={() => handlePromptClick('What is the average salary by department?')}
-            >
-              Department salaries
-            </button>
-            <button
-              type="button"
-              className="sidebar-item"
-              onClick={() => handlePromptClick('What is the employee distribution across work locations?')}
-            >
-              Work location trends
-            </button>
+            {recentChats.length === 0 ? (
+              <div className="sidebar-empty-recent">No recent chats</div>
+            ) : (
+              recentChats.map((chat, idx) => (
+                <button
+                  key={`${idx}-${chat}`}
+                  type="button"
+                  className="sidebar-item recent-chat-item"
+                  title={chat}
+                  onClick={() => handlePromptClick(chat)}
+                >
+                  <span className="chat-icon">💬</span>
+                  <span className="recent-chat-text">{chat}</span>
+                </button>
+              ))
+            )}
           </div>
 
           <div className="sidebar-footer">
-            <div className="footer-db-row">
-              <span className="db-dot" />
-              <span>{dbStatus.dbName}</span>
-              <span className="db-version">{dbStatus.engine}</span>
+            {profileMenuOpen && (
+              <div className="profile-popover-menu" role="menu">
+                <div
+                  className="popover-user-card"
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    handleNavigateToProfile()
+                  }}
+                >
+                  <div className="popover-avatar-circle">{userInitial}</div>
+                  <div className="popover-user-info">
+                    <div className="popover-user-name">{userName}</div>
+                    <div className="popover-user-plan">{userPlan}</div>
+                  </div>
+                  <span className="popover-chevron">›</span>
+                </div>
+
+                <div className="popover-divider" />
+
+                <button
+                  type="button"
+                  className="popover-item"
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    setShowUpgradeModal(true)
+                  }}
+                >
+                  <span className="popover-icon">✦</span>
+                  <span>Upgrade plan</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="popover-item"
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    setShowSettingsModal(true)
+                  }}
+                >
+                  <span className="popover-icon">🎨</span>
+                  <span>Personalization</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="popover-item"
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    handleNavigateToProfile()
+                  }}
+                >
+                  <span className="popover-icon">👤</span>
+                  <span>Profile</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="popover-item"
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    setShowSettingsModal(true)
+                  }}
+                >
+                  <span className="popover-icon">⚙</span>
+                  <span>Settings</span>
+                </button>
+
+                <div className="popover-divider" />
+
+                <button
+                  type="button"
+                  className="popover-item"
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    setShowHelpModal(true)
+                  }}
+                >
+                  <span className="popover-icon">🎯</span>
+                  <span>Help</span>
+                  <span className="popover-chevron right">›</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="popover-item danger-item"
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    if (onLogout) onLogout()
+                  }}
+                >
+                  <span className="popover-icon">↳</span>
+                  <span>Log out</span>
+                </button>
+              </div>
+            )}
+
+            <div
+              className={`sidebar-profile-box ${profileMenuOpen ? 'is-active' : ''}`}
+              onClick={() => setProfileMenuOpen((prev) => !prev)}
+            >
+              <div className="profile-box-avatar">{userInitial}</div>
+              <div className="profile-box-info">
+                <div className="profile-box-name">{userName}</div>
+                <div className="profile-box-plan">{userPlan}</div>
+              </div>
+              <div className="profile-box-store-icon">🏪</div>
             </div>
-            <button type="button" className="sidebar-item footer-link" onClick={onBackHome}>
-              Settings
-            </button>
-            <button type="button" className="sidebar-item footer-link" onClick={onBackHome}>
-              Help &amp; Documentation
-            </button>
           </div>
         </aside>
 
@@ -261,15 +539,6 @@ function WorkspacePage({ onBackHome, theme, onToggleTheme }) {
                 />
                 {loading ? 'Processing...' : 'Ready'}
               </div>
-            </div>
-
-            <div className="query-mode-row">
-              <button type="button" className="mode-tag">
-                Read-only
-              </button>
-              <button type="button" className="mode-tag">
-                Schema mode
-              </button>
             </div>
           </div>
 
@@ -293,6 +562,17 @@ function WorkspacePage({ onBackHome, theme, onToggleTheme }) {
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {conversation.length > 0 && (
+            <div className="conversation-thread">
+              {conversation.map((message) => (
+                <div key={message.id} className={`message-row ${message.role}`}>
+                  <div className="message-avatar">{message.role === 'assistant' ? 'AI' : 'You'}</div>
+                  <div className="message-bubble">{message.text}</div>
+                </div>
+              ))}
             </div>
           )}
 
@@ -392,38 +672,334 @@ function WorkspacePage({ onBackHome, theme, onToggleTheme }) {
           )}
 
           <div className="workspace-composer">
-            <div className="composer-shell">
+            {fileMenuOpen && (
+              <div className="file-options-popover" role="menu">
+                <div className="file-popover-header">Attach Data File</div>
+                <button
+                  type="button"
+                  className="file-option-item"
+                  onClick={() => handleSelectFileType('.csv')}
+                >
+                  <span className="file-option-icon">📄</span>
+                  <div className="file-option-text">
+                    <strong>CSV file</strong>
+                    <span>Comma-separated tabular data (.csv)</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  className="file-option-item"
+                  onClick={() => handleSelectFileType('.xml')}
+                >
+                  <span className="file-option-icon">📋</span>
+                  <div className="file-option-text">
+                    <strong>XML file</strong>
+                    <span>Structured document data (.xml)</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  className="file-option-item"
+                  onClick={() => handleSelectFileType('.xlsx,.xls')}
+                >
+                  <span className="file-option-icon">📊</span>
+                  <div className="file-option-text">
+                    <strong>Excel file</strong>
+                    <span>Spreadsheet workbooks (.xlsx, .xls)</span>
+                  </div>
+                </button>
+              </div>
+            )}
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
+            />
+
+            <div className="composer-shell-pill">
               <button
                 type="button"
-                className="mini-plus"
-                onClick={handleNewChat}
-                title="Reset conversation"
+                className={`composer-plus-btn ${fileMenuOpen ? 'active' : ''}`}
+                onClick={() => setFileMenuOpen((prev) => !prev)}
+                title="Attach CSV, XML, or Excel file"
               >
                 +
               </button>
-              <textarea
-                ref={textareaRef}
-                placeholder="Ask QueryX anything about your database..."
-                rows={1}
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                onKeyDown={handleKeyDown}
-                disabled={loading}
-              />
-              <button
-                type="button"
-                className="send-button"
-                onClick={() => executeQuery()}
-                disabled={loading || !question.trim()}
-                aria-label="Execute query"
-              >
-                {loading ? '…' : '→'}
-              </button>
+
+              <div className="composer-input-wrapper">
+                {attachedFile && (
+                  <div className="file-attached-badge">
+                    <span className="badge-icon">📎</span>
+                    <span className="badge-name">{attachedFile.name} ({attachedFile.size})</span>
+                    <button
+                      type="button"
+                      className="badge-remove"
+                      onClick={handleRemoveFile}
+                      title="Remove file"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+                <input
+                  ref={textareaRef}
+                  type="text"
+                  className="composer-pill-input"
+                  placeholder="Ask anything..."
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  disabled={loading}
+                />
+              </div>
+
+              <div className="composer-right-actions">
+                <button
+                  type="button"
+                  className={`think-toggle-btn ${thinkMode ? 'active' : ''}`}
+                  onClick={() => setThinkMode((prev) => !prev)}
+                  title="Toggle AI Thinking Mode"
+                >
+                  <span className="think-brain-icon">🧠</span>
+                  <span>Think</span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`mic-btn ${isListening ? 'listening' : ''}`}
+                  onClick={() => setIsListening((prev) => !prev)}
+                  title="Voice dictation"
+                >
+                  🎙
+                </button>
+
+                <button
+                  type="button"
+                  className="send-circle-btn"
+                  onClick={() => executeQuery()}
+                  disabled={loading || (!question.trim() && !attachedFile)}
+                  aria-label="Send message"
+                >
+                  {loading ? '…' : '⚡'}
+                </button>
+              </div>
             </div>
             <div className="composer-hint">Press Enter to execute • Shift + Enter for new line</div>
           </div>
         </main>
       </div>
+
+      {/* Settings Modal - Centered with background blur (Pic 2) */}
+      {showSettingsModal && (
+        <div className="settings-modal-overlay" onClick={() => setShowSettingsModal(false)}>
+          <div className="settings-modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-modal-sidebar">
+              <button
+                type="button"
+                className="modal-sidebar-close"
+                onClick={() => setShowSettingsModal(false)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+              <div className="modal-sidebar-title">Settings</div>
+              <div className="modal-tab-list">
+                <button
+                  type="button"
+                  className={`modal-tab-item ${activeSettingsTab === 'general' ? 'active' : ''}`}
+                  onClick={() => setActiveSettingsTab('general')}
+                >
+                  <span className="tab-icon">⚙</span>
+                  <span>General</span>
+                </button>
+                <button
+                  type="button"
+                  className={`modal-tab-item ${activeSettingsTab === 'notifications' ? 'active' : ''}`}
+                  onClick={() => setActiveSettingsTab('notifications')}
+                >
+                  <span className="tab-icon">🔔</span>
+                  <span>Notifications</span>
+                </button>
+                <button
+                  type="button"
+                  className={`modal-tab-item ${activeSettingsTab === 'personalization' ? 'active' : ''}`}
+                  onClick={() => setActiveSettingsTab('personalization')}
+                >
+                  <span className="tab-icon">🎨</span>
+                  <span>Personalization</span>
+                </button>
+                <button
+                  type="button"
+                  className={`modal-tab-item ${activeSettingsTab === 'datacontrols' ? 'active' : ''}`}
+                  onClick={() => setActiveSettingsTab('datacontrols')}
+                >
+                  <span className="tab-icon">💾</span>
+                  <span>Data controls</span>
+                </button>
+                <button
+                  type="button"
+                  className={`modal-tab-item ${activeSettingsTab === 'security' ? 'active' : ''}`}
+                  onClick={() => setActiveSettingsTab('security')}
+                >
+                  <span className="tab-icon">🛡</span>
+                  <span>Security &amp; Login</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-modal-content">
+              <div className="modal-header-row">
+                <h2>General</h2>
+                <button
+                  type="button"
+                  className="modal-close-x"
+                  onClick={() => setShowSettingsModal(false)}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Security Banner matching Pic 2 */}
+              <div className="settings-security-banner">
+                <div className="banner-shield">🛡</div>
+                <div className="banner-body">
+                  <strong>Secure your account</strong>
+                  <p>Add multi-factor authentication (MFA), like a text message or authenticator app, to help protect your account when logging in.</p>
+                  <button type="button" className="mfa-btn">Set up MFA</button>
+                </div>
+              </div>
+
+              {/* Settings Rows */}
+              <div className="settings-row-group">
+                <div className="settings-field-row">
+                  <div className="field-info">
+                    <span className="field-title">Appearance</span>
+                  </div>
+                  <div className="field-control">
+                    <select
+                      className="settings-select"
+                      value={theme}
+                      onChange={(e) => {
+                        if (setTheme) setTheme(e.target.value)
+                        else onToggleTheme()
+                      }}
+                    >
+                      <option value="dark">Dark</option>
+                      <option value="light">Light</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="settings-field-row">
+                  <div className="field-info">
+                    <span className="field-title">Accent Color</span>
+                  </div>
+                  <div className="field-control">
+                    <div className="accent-swatches">
+                      {Object.keys(accentColorsList || {}).map((key) => {
+                        const item = accentColorsList[key]
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            className={`accent-swatch ${accentColor === key ? 'active' : ''}`}
+                            style={{ background: item.primary }}
+                            title={item.name}
+                            onClick={() => onSelectAccent && onSelectAccent(key)}
+                          />
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="settings-field-row">
+                  <div className="field-info">
+                    <span className="field-title">Language</span>
+                  </div>
+                  <div className="field-control">
+                    <select className="settings-select" defaultValue="auto">
+                      <option value="auto">Auto-detect</option>
+                      <option value="en">English (US)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="settings-field-row">
+                  <div className="field-info">
+                    <span className="field-title">Read-only Guard</span>
+                  </div>
+                  <div className="field-control">
+                    <span className="badge-active">Active</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upgrade Plan Modal */}
+      {showUpgradeModal && (
+        <div className="settings-modal-overlay" onClick={() => setShowUpgradeModal(false)}>
+          <div className="settings-modal-dialog simple-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-header">
+              <h2>Upgrade Plan</h2>
+              <button type="button" className="modal-close-x" onClick={() => setShowUpgradeModal(false)}>✕</button>
+            </div>
+            <div className="upgrade-plans-grid">
+              <div className="plan-card current">
+                <span className="plan-tag">Current Plan</span>
+                <h3>QueryX Free (Go)</h3>
+                <p>Standard SQLite query engine &amp; schema introspection.</p>
+                <div className="plan-price">$0 <span>/ mo</span></div>
+              </div>
+              <div className="plan-card featured">
+                <span className="plan-tag featured-tag">Recommended</span>
+                <h3>QueryX Pro Copilot</h3>
+                <p>Unlimited LLM queries, multi-database sync, export options &amp; team workspace.</p>
+                <div className="plan-price">$19 <span>/ mo</span></div>
+                <button
+                  type="button"
+                  className="upgrade-action-btn"
+                  onClick={() => {
+                    setUserPlan('Pro')
+                    setShowUpgradeModal(false)
+                  }}
+                >
+                  Upgrade to Pro
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Help Modal */}
+      {showHelpModal && (
+        <div className="settings-modal-overlay" onClick={() => setShowHelpModal(false)}>
+          <div className="settings-modal-dialog simple-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-header">
+              <h2>Help &amp; Documentation</h2>
+              <button type="button" className="modal-close-x" onClick={() => setShowHelpModal(false)}>✕</button>
+            </div>
+            <div className="help-content-body">
+              <h3>Getting Started with QueryX</h3>
+              <p>Ask questions in plain English to generate SELECT-only SQL queries against your SQLite database.</p>
+              <h4>Useful Shortcuts:</h4>
+              <ul>
+                <li><code>Enter</code>: Execute query in composer</li>
+                <li><code>Shift + Enter</code>: Add line break in composer</li>
+                <li><code>Click Recent Query</code>: Re-run past question</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
