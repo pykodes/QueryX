@@ -1,5 +1,7 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { checkHealth, getSampleQuestions, askQuestion } from '../services/api.js'
+import VisualizationCard from '../components/VisualizationCard/VisualizationCard'
+import { analyzeQueryResult } from '../components/VisualizationCard/ChartAnalyzer'
 
 function WorkspacePage({
   onBackHome,
@@ -17,6 +19,31 @@ function WorkspacePage({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [currentResult, setCurrentResult] = useState(null)
+  const [exchanges, setExchanges] = useState([])
+  const [highlightedVizId, setHighlightedVizId] = useState(null)
+  const [currentVizNavIndex, setCurrentVizNavIndex] = useState(-1)
+  const vizCardRefs = useRef({})
+  const chatStreamRef = useRef(null)
+  const chatEndRef = useRef(null)
+
+  const scrollToBottom = useCallback(() => {
+    setTimeout(() => {
+      if (chatEndRef.current) {
+        chatEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' })
+      } else if (chatStreamRef.current) {
+        chatStreamRef.current.scrollTo({
+          top: chatStreamRef.current.scrollHeight,
+          behavior: 'smooth',
+        })
+      }
+    }, 80)
+  }, [])
+
+  useEffect(() => {
+    if (exchanges.length > 0 || loading) {
+      scrollToBottom()
+    }
+  }, [exchanges, loading, scrollToBottom])
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState('ask')
   const [recentChats, setRecentChats] = useState([])
@@ -30,8 +57,6 @@ function WorkspacePage({
   // File Upload & Composer States
   const [fileMenuOpen, setFileMenuOpen] = useState(false)
   const [attachedFile, setAttachedFile] = useState(null)
-  const [thinkMode, setThinkMode] = useState(false)
-  const [isListening, setIsListening] = useState(false)
   const fileInputRef = useRef(null)
 
   const handleSelectFileType = (acceptTypes) => {
@@ -105,13 +130,7 @@ function WorkspacePage({
     }
   }
 
-  const [conversation, setConversation] = useState([
-    {
-      id: 'welcome',
-      role: 'assistant',
-      text: 'Hi! I can translate your natural-language questions into safe SQL and summarize the results for you.',
-    },
-  ])
+
   const [dbStatus, setDbStatus] = useState({
     connected: true,
     dbName: 'company.db',
@@ -154,6 +173,31 @@ function WorkspacePage({
       .catch(() => {})
   }, [])
 
+  const EXPLICIT_VIZ_REGEX = /graph|visualize|visualization|chart|plot|graphically|visual representation|show data visually/i
+
+  const handleToggleVisualization = (exchangeId) => {
+    let willBeVisible = false
+    setExchanges((prev) =>
+      prev.map((ex) => {
+        if (ex.id === exchangeId) {
+          willBeVisible = !ex.visualizationVisible
+          return { ...ex, visualizationVisible: willBeVisible }
+        }
+        return ex
+      })
+    )
+
+    if (willBeVisible) {
+      setTimeout(() => {
+        if (exchangeId && vizCardRefs.current[exchangeId]) {
+          vizCardRefs.current[exchangeId].scrollIntoView({ behavior: 'smooth', block: 'center' })
+          setHighlightedVizId(exchangeId)
+          setTimeout(() => setHighlightedVizId(null), 2500)
+        }
+      }, 100)
+    }
+  }
+
   const executeQuery = async (queryText) => {
     let targetQuery = (queryText || question).trim()
     if (!targetQuery && attachedFile) {
@@ -161,22 +205,31 @@ function WorkspacePage({
     }
     if (!targetQuery || loading) return
 
+    const isExplicitVizReq = EXPLICIT_VIZ_REGEX.test(targetQuery)
+
+    // Check if user is asking a follow-up request to visualize the previous query (e.g., "show me a graph")
+    const isPureFollowUpVizReq =
+      isExplicitVizReq &&
+      targetQuery.split(' ').length <= 6 &&
+      !/select|from|where|count|avg|sum|salary|employee|department|who|what|how many|which/i.test(targetQuery)
+
+    const preparedUnrevealedEx = exchanges.slice().reverse().find((ex) => ex.visualizationAvailable && !ex.visualizationVisible)
+
+    if (isPureFollowUpVizReq && preparedUnrevealedEx) {
+      handleToggleVisualization(preparedUnrevealedEx.id)
+      setQuestion('')
+      return
+    }
+
     setRecentChats((prev) => {
       const filtered = prev.filter((q) => q !== targetQuery)
       return [targetQuery, ...filtered]
     })
 
-    const userMessageText = targetQuery + (attachedFile ? ` 📎 [${attachedFile.name}]` : '')
-    const userMessage = {
-      id: `${Date.now()}-user`,
-      role: 'user',
-      text: userMessageText,
-    }
-
-    setConversation((previous) => [...previous, userMessage])
     setQuestion('')
     setLoading(true)
     setError(null)
+    scrollToBottom()
 
     const activeAttached = attachedFile
     setAttachedFile(null)
@@ -192,36 +245,25 @@ function WorkspacePage({
       if (data.error) {
         setError(data.error)
         setCurrentResult(data.generated_sql ? data : null)
-        setConversation((previous) => [
-          ...previous,
-          {
-            id: `${Date.now()}-assistant-error`,
-            role: 'assistant',
-            text: data.error,
-          },
-        ])
       } else {
-        setCurrentResult(data)
-        setConversation((previous) => [
-          ...previous,
-          {
-            id: `${Date.now()}-assistant`,
-            role: 'assistant',
-            text: data.answer || 'I ran the query and prepared the insights for you.',
-          },
-        ])
+        const isChartable =
+          Boolean(data.rows && data.rows.length >= 2 && analyzeQueryResult(data.rows, targetQuery).isChartable)
+
+        const resultWithId = {
+          ...data,
+          id: `ex-${Date.now()}`,
+          question: targetQuery,
+          visualizationAvailable: isChartable,
+          visualizationPrepared: isChartable,
+          visualizationVisible: isChartable && isExplicitVizReq,
+        }
+
+        setCurrentResult(resultWithId)
+        setExchanges((prev) => [...prev, resultWithId])
       }
     } catch (err) {
       const message = err.message || 'Error processing request.'
       setError(message)
-      setConversation((previous) => [
-        ...previous,
-        {
-          id: `${Date.now()}-assistant-fail`,
-          role: 'assistant',
-          text: message,
-        },
-      ])
     } finally {
       setLoading(false)
     }
@@ -244,15 +286,10 @@ function WorkspacePage({
 
   const handleNewChat = () => {
     setCurrentResult(null)
+    setExchanges([])
     setError(null)
     setQuestion('')
-    setConversation([
-      {
-        id: 'welcome',
-        role: 'assistant',
-        text: 'New session started. Ask me anything about your database.',
-      },
-    ])
+    setCurrentVizNavIndex(-1)
     if (textareaRef.current) {
       textareaRef.current.focus()
     }
@@ -261,6 +298,45 @@ function WorkspacePage({
   const handlePromptClick = (prompt) => {
     setQuestion(prompt)
     executeQuery(prompt)
+  }
+
+  // Count chartable visualizations available in current chat exchanges
+  const availableExchanges = exchanges.filter((ex) => ex && ex.visualizationAvailable)
+  const vizCount = availableExchanges.length
+
+  // Navigate/scroll to latest or cycle through prepared visualizations in chat
+  const handleVisualRepresentationClick = () => {
+    setActiveTab('visual')
+
+    if (vizCount === 0) {
+      // Remain inactive if no meaningful visualizations available
+      return
+    }
+
+    // Find the first hidden available exchange or cycle
+    const hiddenEx = availableExchanges.find((ex) => !ex.visualizationVisible)
+    const targetExchange =
+      hiddenEx ||
+      availableExchanges[(currentVizNavIndex + 1) % vizCount] ||
+      availableExchanges[availableExchanges.length - 1]
+
+    const targetIdx = availableExchanges.indexOf(targetExchange)
+    setCurrentVizNavIndex(targetIdx >= 0 ? targetIdx : 0)
+
+    if (targetExchange && targetExchange.id) {
+      if (!targetExchange.visualizationVisible) {
+        setExchanges((prev) =>
+          prev.map((ex) => (ex.id === targetExchange.id ? { ...ex, visualizationVisible: true } : ex))
+        )
+      }
+      setTimeout(() => {
+        if (vizCardRefs.current[targetExchange.id]) {
+          vizCardRefs.current[targetExchange.id].scrollIntoView({ behavior: 'smooth', block: 'center' })
+          setHighlightedVizId(targetExchange.id)
+          setTimeout(() => setHighlightedVizId(null), 2500)
+        }
+      }, 100)
+    }
   }
 
   const userName = user?.fullName || 'Guest User'
@@ -348,73 +424,98 @@ function WorkspacePage({
 
       <div className="workspace-shell">
         <aside className="workspace-sidebar">
-          <button type="button" className="new-chat-button" onClick={handleNewChat}>
-            + New Chat
-          </button>
+          <div className="sidebar-fixed-top">
+            <button type="button" className="new-chat-button" onClick={handleNewChat}>
+              + New Chat
+            </button>
 
-          <div className="sidebar-group">
-            <div className="sidebar-label">WORKSPACE</div>
-            <button
-              type="button"
-              className={`sidebar-item ${activeTab === 'ask' ? 'active' : ''}`}
-              onClick={() => setActiveTab('ask')}
-            >
-              Ask Database
-            </button>
-            <button
-              type="button"
-              className={`sidebar-item ${activeTab === 'insights' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveTab('insights')
-                handlePromptClick('What is the average salary by department?')
-              }}
-            >
-              Insights
-            </button>
-            <button
-              type="button"
-              className={`sidebar-item ${activeTab === 'saved' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveTab('saved')
-                handlePromptClick('Who are the highest paid employees?')
-              }}
-            >
-              Saved Queries
-            </button>
-          </div>
-
-          <div className="sidebar-group">
-            <div className="sidebar-label">DATABASES</div>
-            <div className="sidebar-item sidebar-db-item">
-              <span
-                className="db-dot"
-                style={{
-                  background: dbStatus.connected ? 'var(--workspace-success)' : '#ef4444',
+            <div className="sidebar-group">
+              <div className="sidebar-label">WORKSPACE</div>
+              <button
+                type="button"
+                className={`sidebar-item ${activeTab === 'ask' ? 'active' : ''}`}
+                onClick={() => setActiveTab('ask')}
+              >
+                Ask Database
+              </button>
+              <button
+                type="button"
+                className={`sidebar-item ${activeTab === 'insights' ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTab('insights')
+                  handlePromptClick('What is the average salary by department?')
                 }}
-              />
-              <span className="sidebar-db-name">{dbStatus.dbName}</span>
-              <span className="db-version">{dbStatus.engine}</span>
+              >
+                Insights
+              </button>
+              <button
+                type="button"
+                className={`sidebar-item ${activeTab === 'saved' ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTab('saved')
+                  handlePromptClick('Who are the highest paid employees?')
+                }}
+              >
+                Saved Queries
+              </button>
+              <button
+                type="button"
+                className={`sidebar-item viz-representation-item ${activeTab === 'visual' ? 'active' : ''} ${
+                  vizCount > 0 ? 'viz-ready' : ''
+                }`}
+                onClick={handleVisualRepresentationClick}
+                title={
+                  vizCount > 0
+                    ? `Click to view generated visualization (${vizCount} ready)`
+                    : 'Click to generate a visual representation'
+                }
+              >
+                <span className="viz-item-icon">📊</span>
+                <span>Visual Representation</span>
+                {vizCount > 0 && (
+                  <span className="viz-ready-badge">
+                    <span className="viz-ready-dot" />
+                    {vizCount} {vizCount === 1 ? 'Ready' : 'Ready'}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <div className="sidebar-group">
+              <div className="sidebar-label">DATABASES</div>
+              <div className="sidebar-item sidebar-db-item">
+                <span
+                  className="db-dot"
+                  style={{
+                    background: dbStatus.connected ? 'var(--workspace-success)' : '#ef4444',
+                  }}
+                />
+                <span className="sidebar-db-name">{dbStatus.dbName}</span>
+                <span className="db-version">{dbStatus.engine}</span>
+              </div>
             </div>
           </div>
 
-          <div className="sidebar-group">
+          <div className="sidebar-group sidebar-group-recent">
             <div className="sidebar-label">RECENT</div>
-            {recentChats.length === 0 ? (
-              <div className="sidebar-empty-recent">No recent chats</div>
-            ) : (
-              recentChats.map((chat, idx) => (
-                <button
-                  key={`${idx}-${chat}`}
-                  type="button"
-                  className="sidebar-item recent-chat-item"
-                  title={chat}
-                  onClick={() => handlePromptClick(chat)}
-                >
-                  <span className="chat-icon">💬</span>
-                  <span className="recent-chat-text">{chat}</span>
-                </button>
-              ))
-            )}
+            <div className="sidebar-recent-scroll">
+              {recentChats.length === 0 ? (
+                <div className="sidebar-empty-recent">No recent chats</div>
+              ) : (
+                recentChats.map((chat, idx) => (
+                  <button
+                    key={`${idx}-${chat}`}
+                    type="button"
+                    className="sidebar-item recent-chat-item"
+                    title={chat}
+                    onClick={() => handlePromptClick(chat)}
+                  >
+                    <span className="chat-icon">💬</span>
+                    <span className="recent-chat-text">{chat}</span>
+                  </button>
+                ))
+              )}
+            </div>
           </div>
 
           <div className="sidebar-footer">
@@ -542,7 +643,7 @@ function WorkspacePage({
             </div>
           </div>
 
-          {!currentResult && !loading && !error && (
+          {exchanges.length === 0 && !currentResult && !loading && !error && (
             <div className="chat-empty-state">
               <div className="empty-icon">Q</div>
               <h1>Ask your database anything</h1>
@@ -565,26 +666,8 @@ function WorkspacePage({
             </div>
           )}
 
-          {conversation.length > 0 && (
-            <div className="conversation-thread">
-              {conversation.map((message) => (
-                <div key={message.id} className={`message-row ${message.role}`}>
-                  <div className="message-avatar">{message.role === 'assistant' ? 'AI' : 'You'}</div>
-                  <div className="message-bubble">{message.text}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {loading && (
-            <div className="query-loading-wrap">
-              <div className="query-pulse-spinner" />
-              <div>Translating question to SQL &amp; querying database...</div>
-            </div>
-          )}
-
-          {(currentResult || error) && !loading && (
-            <div className="workspace-results-scroll">
+          {(exchanges.length > 0 || error || loading) && (
+            <div ref={chatStreamRef} className="workspace-chat-stream">
               {error && (
                 <div className="query-error-banner">
                   <span>⚠️</span>
@@ -594,80 +677,123 @@ function WorkspacePage({
                 </div>
               )}
 
-              {currentResult && (
-                <div className="query-exchange-card">
-                  <div className="query-user-bubble">
-                    <div className="query-user-icon">Q</div>
-                    <div>{currentResult.question}</div>
+              {exchanges.map((ex, exIdx) => (
+                <div key={ex.id || exIdx} className="chat-turn-container">
+                  {/* USER QUESTION BUBBLE */}
+                  <div className="message-row user">
+                    <div className="message-bubble">{ex.question}</div>
+                    <div className="message-avatar">You</div>
                   </div>
 
-                  {currentResult.answer && (
-                    <div className="query-answer-box">
-                      <strong>AI Summary: </strong>
-                      {currentResult.answer}
-                    </div>
-                  )}
+                  {/* AI ASSISTANT RESPONSE WITH SQL, DATA & RECHARTS VISUALIZATION */}
+                  <div className="message-row assistant">
+                    <div className="message-avatar">AI</div>
+                    <div className="query-exchange-card">
+                      {ex.answer && (
+                        <div className="query-answer-box">
+                          <strong>AI Summary: </strong>
+                          {ex.answer}
+                        </div>
+                      )}
 
-                  {currentResult.generated_sql && (
-                    <div className="query-sql-container">
-                      <div className="query-sql-header">
-                        <span>GENERATED SQL (SQLITE)</span>
-                        <button
-                          type="button"
-                          className="query-sql-copy-btn"
-                          onClick={() => handleCopySQL(currentResult.generated_sql)}
-                        >
-                          {copied ? '✓ Copied!' : 'Copy SQL'}
-                        </button>
+                      {ex.generated_sql && (
+                        <div className="query-sql-container">
+                          <div className="query-sql-header">
+                            <span>GENERATED SQL (SQLITE)</span>
+                            <button
+                              type="button"
+                              className="query-sql-copy-btn"
+                              onClick={() => handleCopySQL(ex.generated_sql)}
+                            >
+                              {copied ? '✓ Copied!' : 'Copy SQL'}
+                            </button>
+                          </div>
+                          <pre className="query-sql-code">{ex.generated_sql}</pre>
+                        </div>
+                      )}
+
+                      <div className="query-meta-bar">
+                        <div className="query-meta-item">
+                          <span>Latency:</span>
+                          <strong>{ex.execution_time_ms} ms</strong>
+                        </div>
+                        <div className="query-meta-item">
+                          <span>Rows:</span>
+                          <strong>{ex.row_count}</strong>
+                        </div>
+                        <div className="query-safety-badge">
+                          <span>✓</span> Safe Mode: PASS
+                        </div>
                       </div>
-                      <pre className="query-sql-code">{currentResult.generated_sql}</pre>
-                    </div>
-                  )}
 
-                  <div className="query-meta-bar">
-                    <div className="query-meta-item">
-                      <span>Latency:</span>
-                      <strong>{currentResult.execution_time_ms} ms</strong>
-                    </div>
-                    <div className="query-meta-item">
-                      <span>Rows:</span>
-                      <strong>{currentResult.row_count}</strong>
-                    </div>
-                    <div className="query-safety-badge">
-                      <span>✓</span> Safe Mode: PASS
+                      {ex.rows && ex.rows.length > 0 && (
+                        <div className="query-table-scroll">
+                          <table className="query-data-table">
+                            <thead>
+                              <tr>
+                                {Object.keys(ex.rows[0]).map((col) => (
+                                  <th key={col}>{col.replace(/_/g, ' ')}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {ex.rows.map((row, idx) => (
+                                <tr key={idx}>
+                                  {Object.keys(ex.rows[0]).map((col) => (
+                                    <td key={col}>
+                                      {typeof row[col] === 'number'
+                                        ? row[col].toLocaleString()
+                                        : row[col] !== null && row[col] !== undefined
+                                          ? String(row[col])
+                                          : '—'}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* VISUAL REPRESENTATION TOGGLE CONTROL */}
+                      {ex.visualizationAvailable && (
+                        <div className="viz-toggle-wrapper">
+                          <button
+                            type="button"
+                            className={`viz-toggle-btn ${ex.visualizationVisible ? 'is-open' : 'is-closed'}`}
+                            onClick={() => handleToggleVisualization(ex.id)}
+                            aria-expanded={ex.visualizationVisible}
+                          >
+                            <span className="viz-toggle-icon">📊</span>
+                            <span className="viz-toggle-label">Visual Representation</span>
+                            <span className="viz-toggle-chevron">
+                              {ex.visualizationVisible ? '▲' : '▼'}
+                            </span>
+                          </button>
+                        </div>
+                      )}
+
+                      {/* RECHARTS VISUALIZATION CARD (ONLY RENDERED WHEN VISIBLE = TRUE) */}
+                      {ex.visualizationAvailable && ex.visualizationVisible && (
+                        <VisualizationCard
+                          result={ex}
+                          cardRef={(el) => (vizCardRefs.current[ex.id || exIdx] = el)}
+                          isHighlighted={highlightedVizId === (ex.id || exIdx)}
+                        />
+                      )}
                     </div>
                   </div>
+                </div>
+              ))}
 
-                  {currentResult.rows && currentResult.rows.length > 0 && (
-                    <div className="query-table-scroll">
-                      <table className="query-data-table">
-                        <thead>
-                          <tr>
-                            {Object.keys(currentResult.rows[0]).map((col) => (
-                              <th key={col}>{col.replace(/_/g, ' ')}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {currentResult.rows.map((row, idx) => (
-                            <tr key={idx}>
-                              {Object.keys(currentResult.rows[0]).map((col) => (
-                                <td key={col}>
-                                  {typeof row[col] === 'number'
-                                    ? row[col].toLocaleString()
-                                    : row[col] !== null && row[col] !== undefined
-                                      ? String(row[col])
-                                      : '—'}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+              {loading && (
+                <div className="query-loading-wrap">
+                  <div className="query-pulse-spinner" />
+                  <div>Translating question to SQL &amp; querying database...</div>
                 </div>
               )}
+
+              <div ref={chatEndRef} style={{ height: 1 }} />
             </div>
           )}
 
@@ -758,25 +884,6 @@ function WorkspacePage({
               </div>
 
               <div className="composer-right-actions">
-                <button
-                  type="button"
-                  className={`think-toggle-btn ${thinkMode ? 'active' : ''}`}
-                  onClick={() => setThinkMode((prev) => !prev)}
-                  title="Toggle AI Thinking Mode"
-                >
-                  <span className="think-brain-icon">🧠</span>
-                  <span>Think</span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`mic-btn ${isListening ? 'listening' : ''}`}
-                  onClick={() => setIsListening((prev) => !prev)}
-                  title="Voice dictation"
-                >
-                  🎙
-                </button>
-
                 <button
                   type="button"
                   className="send-circle-btn"
