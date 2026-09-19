@@ -1,7 +1,132 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, memo } from 'react'
 import { checkHealth, getSampleQuestions, askQuestion } from '../services/api.js'
 import VisualizationCard from '../components/VisualizationCard/VisualizationCard'
 import { analyzeQueryResult } from '../components/VisualizationCard/ChartAnalyzer'
+import VoiceInput from '../components/VoiceInput/VoiceInput'
+
+/**
+ * ChatTurn — memoized so it only re-renders when its own exchange data changes.
+ * Voice recognition state, question text, and isVoiceListening changes in WorkspacePage
+ * do NOT cause past chat turns to re-render (no more Recharts/table cascade).
+ */
+const ChatTurn = memo(function ChatTurn({
+  ex,
+  exIdx,
+  copied,
+  highlightedVizId,
+  vizCardRefs,
+  onToggleVisualization,
+  onCopySQL,
+}) {
+  return (
+    <div className="chat-turn-container">
+      {/* USER QUESTION BUBBLE */}
+      <div className="message-row user">
+        <div className="message-bubble">{ex.question}</div>
+        <div className="message-avatar">You</div>
+      </div>
+
+      {/* AI ASSISTANT RESPONSE WITH SQL, DATA & RECHARTS VISUALIZATION */}
+      <div className="message-row assistant">
+        <div className="message-avatar">AI</div>
+        <div className="query-exchange-card">
+          {ex.answer && (
+            <div className="query-answer-box">
+              <strong>AI Summary: </strong>
+              {ex.answer}
+            </div>
+          )}
+
+          {ex.generated_sql && (
+            <div className="query-sql-container">
+              <div className="query-sql-header">
+                <span>GENERATED SQL (SQLITE)</span>
+                <button
+                  type="button"
+                  className="query-sql-copy-btn"
+                  onClick={() => onCopySQL(ex.generated_sql)}
+                >
+                  {copied ? '✓ Copied!' : 'Copy SQL'}
+                </button>
+              </div>
+              <pre className="query-sql-code">{ex.generated_sql}</pre>
+            </div>
+          )}
+
+          <div className="query-meta-bar">
+            <div className="query-meta-item">
+              <span>Latency:</span>
+              <strong>{ex.execution_time_ms} ms</strong>
+            </div>
+            <div className="query-meta-item">
+              <span>Rows:</span>
+              <strong>{ex.row_count}</strong>
+            </div>
+            <div className="query-safety-badge">
+              <span>✓</span> Safe Mode: PASS
+            </div>
+          </div>
+
+          {ex.rows && ex.rows.length > 0 && (
+            <div className="query-table-scroll">
+              <table className="query-data-table">
+                <thead>
+                  <tr>
+                    {Object.keys(ex.rows[0]).map((col) => (
+                      <th key={col}>{col.replace(/_/g, ' ')}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {ex.rows.map((row, idx) => (
+                    <tr key={idx}>
+                      {Object.keys(ex.rows[0]).map((col) => (
+                        <td key={col}>
+                          {typeof row[col] === 'number'
+                            ? row[col].toLocaleString()
+                            : row[col] !== null && row[col] !== undefined
+                              ? String(row[col])
+                              : '—'}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* VISUAL REPRESENTATION TOGGLE CONTROL */}
+          {ex.visualizationAvailable && (
+            <div className="viz-toggle-wrapper">
+              <button
+                type="button"
+                className={`viz-toggle-btn ${ex.visualizationVisible ? 'is-open' : 'is-closed'}`}
+                onClick={() => onToggleVisualization(ex.id)}
+                aria-expanded={ex.visualizationVisible}
+              >
+                <span className="viz-toggle-icon">📊</span>
+                <span className="viz-toggle-label">Visual Representation</span>
+                <span className="viz-toggle-chevron">
+                  {ex.visualizationVisible ? '▲' : '▼'}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {/* RECHARTS VISUALIZATION CARD (ONLY RENDERED WHEN VISIBLE = TRUE) */}
+          {ex.visualizationAvailable && ex.visualizationVisible && (
+            <VisualizationCard
+              result={ex}
+              cardRef={(el) => (vizCardRefs.current[ex.id || exIdx] = el)}
+              isHighlighted={highlightedVizId === (ex.id || exIdx)}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+})
 
 function WorkspacePage({
   onBackHome,
@@ -16,6 +141,7 @@ function WorkspacePage({
   accentColorsList,
 }) {
   const [question, setQuestion] = useState('')
+  const [isVoiceListening, setIsVoiceListening] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [currentResult, setCurrentResult] = useState(null)
@@ -25,6 +151,31 @@ function WorkspacePage({
   const vizCardRefs = useRef({})
   const chatStreamRef = useRef(null)
   const chatEndRef = useRef(null)
+  const voiceInputRef = useRef(null)
+
+  // Stable callbacks for VoiceInput — defined once, never recreated
+  const handleVoiceCommit = useCallback((finalText) => setQuestion(finalText), [])
+  const handleVoiceListeningChange = useCallback((listening) => setIsVoiceListening(listening), [])
+
+  // Live update: writes interim/final speech text into the input immediately as user speaks
+  const handleVoiceLiveUpdate = useCallback((text) => setQuestion(text), [])
+
+  // Auto-query: triggered by VoiceInput pause-detection timer (1.5s silence after speech)
+  // Voice has already stopped at this point; just run the query with the committed text
+  const handleVoiceAutoQuery = useCallback((text) => {
+    if (!text || !text.trim()) return
+    setQuestion(text)
+    // Small frame delay so setQuestion renders before executeQuery reads it
+    requestAnimationFrame(() => executeQuery(text))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Auto-dismiss error popup after 5 seconds
+  useEffect(() => {
+    if (!error) return
+    const timer = setTimeout(() => setError(null), 5000)
+    return () => clearTimeout(timer)
+  }, [error])
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
@@ -175,7 +326,7 @@ function WorkspacePage({
 
   const EXPLICIT_VIZ_REGEX = /graph|visualize|visualization|chart|plot|graphically|visual representation|show data visually/i
 
-  const handleToggleVisualization = (exchangeId) => {
+  const handleToggleVisualization = useCallback((exchangeId) => {
     let willBeVisible = false
     setExchanges((prev) =>
       prev.map((ex) => {
@@ -196,9 +347,13 @@ function WorkspacePage({
         }
       }, 100)
     }
-  }
+  }, [])
 
   const executeQuery = async (queryText) => {
+    if (voiceInputRef.current && typeof voiceInputRef.current.stop === 'function') {
+      voiceInputRef.current.stop()
+    }
+
     let targetQuery = (queryText || question).trim()
     if (!targetQuery && attachedFile) {
       targetQuery = `Analyze attached file: ${attachedFile.name}`
@@ -276,13 +431,13 @@ function WorkspacePage({
     }
   }
 
-  const handleCopySQL = (sqlText) => {
+  const handleCopySQL = useCallback((sqlText) => {
     if (!sqlText) return
     navigator.clipboard.writeText(sqlText).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     })
-  }
+  }, [])
 
   const handleNewChat = () => {
     setCurrentResult(null)
@@ -356,6 +511,31 @@ function WorkspacePage({
 
   return (
     <div className="workspace-page">
+      {/* GLOBAL ERROR POPUP TOAST — fixed position, always visible */}
+      {error && (
+        <div className="error-popup-overlay" role="alertdialog" aria-modal="false" aria-label="Error notification">
+          <div className="error-popup-toast">
+            <div className="error-popup-icon-wrap">
+              <span className="error-popup-icon">⚠️</span>
+            </div>
+            <div className="error-popup-body">
+              <div className="error-popup-title">Invalid Input</div>
+              <div className="error-popup-message">{error}</div>
+              <div className="error-popup-hint">Please enter a valid database question or SQL query.</div>
+            </div>
+            <button
+              type="button"
+              className="error-popup-close"
+              onClick={() => setError(null)}
+              aria-label="Dismiss error"
+            >
+              ✕
+            </button>
+            {/* Auto-dismiss progress bar */}
+            <div className="error-popup-progress" />
+          </div>
+        </div>
+      )}
       <header className="workspace-topbar">
         <div className="workspace-statusleft">
           <button
@@ -666,124 +846,20 @@ function WorkspacePage({
             </div>
           )}
 
-          {(exchanges.length > 0 || error || loading) && (
+          {(exchanges.length > 0 || loading) && (
             <div ref={chatStreamRef} className="workspace-chat-stream">
-              {error && (
-                <div className="query-error-banner">
-                  <span>⚠️</span>
-                  <div>
-                    <strong>Query Execution Notice:</strong> {error}
-                  </div>
-                </div>
-              )}
 
               {exchanges.map((ex, exIdx) => (
-                <div key={ex.id || exIdx} className="chat-turn-container">
-                  {/* USER QUESTION BUBBLE */}
-                  <div className="message-row user">
-                    <div className="message-bubble">{ex.question}</div>
-                    <div className="message-avatar">You</div>
-                  </div>
-
-                  {/* AI ASSISTANT RESPONSE WITH SQL, DATA & RECHARTS VISUALIZATION */}
-                  <div className="message-row assistant">
-                    <div className="message-avatar">AI</div>
-                    <div className="query-exchange-card">
-                      {ex.answer && (
-                        <div className="query-answer-box">
-                          <strong>AI Summary: </strong>
-                          {ex.answer}
-                        </div>
-                      )}
-
-                      {ex.generated_sql && (
-                        <div className="query-sql-container">
-                          <div className="query-sql-header">
-                            <span>GENERATED SQL (SQLITE)</span>
-                            <button
-                              type="button"
-                              className="query-sql-copy-btn"
-                              onClick={() => handleCopySQL(ex.generated_sql)}
-                            >
-                              {copied ? '✓ Copied!' : 'Copy SQL'}
-                            </button>
-                          </div>
-                          <pre className="query-sql-code">{ex.generated_sql}</pre>
-                        </div>
-                      )}
-
-                      <div className="query-meta-bar">
-                        <div className="query-meta-item">
-                          <span>Latency:</span>
-                          <strong>{ex.execution_time_ms} ms</strong>
-                        </div>
-                        <div className="query-meta-item">
-                          <span>Rows:</span>
-                          <strong>{ex.row_count}</strong>
-                        </div>
-                        <div className="query-safety-badge">
-                          <span>✓</span> Safe Mode: PASS
-                        </div>
-                      </div>
-
-                      {ex.rows && ex.rows.length > 0 && (
-                        <div className="query-table-scroll">
-                          <table className="query-data-table">
-                            <thead>
-                              <tr>
-                                {Object.keys(ex.rows[0]).map((col) => (
-                                  <th key={col}>{col.replace(/_/g, ' ')}</th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {ex.rows.map((row, idx) => (
-                                <tr key={idx}>
-                                  {Object.keys(ex.rows[0]).map((col) => (
-                                    <td key={col}>
-                                      {typeof row[col] === 'number'
-                                        ? row[col].toLocaleString()
-                                        : row[col] !== null && row[col] !== undefined
-                                          ? String(row[col])
-                                          : '—'}
-                                    </td>
-                                  ))}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-
-                      {/* VISUAL REPRESENTATION TOGGLE CONTROL */}
-                      {ex.visualizationAvailable && (
-                        <div className="viz-toggle-wrapper">
-                          <button
-                            type="button"
-                            className={`viz-toggle-btn ${ex.visualizationVisible ? 'is-open' : 'is-closed'}`}
-                            onClick={() => handleToggleVisualization(ex.id)}
-                            aria-expanded={ex.visualizationVisible}
-                          >
-                            <span className="viz-toggle-icon">📊</span>
-                            <span className="viz-toggle-label">Visual Representation</span>
-                            <span className="viz-toggle-chevron">
-                              {ex.visualizationVisible ? '▲' : '▼'}
-                            </span>
-                          </button>
-                        </div>
-                      )}
-
-                      {/* RECHARTS VISUALIZATION CARD (ONLY RENDERED WHEN VISIBLE = TRUE) */}
-                      {ex.visualizationAvailable && ex.visualizationVisible && (
-                        <VisualizationCard
-                          result={ex}
-                          cardRef={(el) => (vizCardRefs.current[ex.id || exIdx] = el)}
-                          isHighlighted={highlightedVizId === (ex.id || exIdx)}
-                        />
-                      )}
-                    </div>
-                  </div>
-                </div>
+                <ChatTurn
+                  key={ex.id || exIdx}
+                  ex={ex}
+                  exIdx={exIdx}
+                  copied={copied}
+                  highlightedVizId={highlightedVizId}
+                  vizCardRefs={vizCardRefs}
+                  onToggleVisualization={handleToggleVisualization}
+                  onCopySQL={handleCopySQL}
+                />
               ))}
 
               {loading && (
@@ -846,7 +922,7 @@ function WorkspacePage({
               onChange={handleFileChange}
             />
 
-            <div className="composer-shell-pill">
+            <div className={`composer-shell-pill ${isVoiceListening ? 'listening-active' : ''}`}>
               <button
                 type="button"
                 className={`composer-plus-btn ${fileMenuOpen ? 'active' : ''}`}
@@ -875,7 +951,7 @@ function WorkspacePage({
                   ref={textareaRef}
                   type="text"
                   className="composer-pill-input"
-                  placeholder="Ask anything..."
+                  placeholder={isVoiceListening ? 'Listening...' : 'Ask anything...'}
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
                   onKeyDown={handleKeyDown}
@@ -884,6 +960,15 @@ function WorkspacePage({
               </div>
 
               <div className="composer-right-actions">
+                <VoiceInput
+                  ref={voiceInputRef}
+                  currentValue={question}
+                  onCommit={handleVoiceCommit}
+                  onLiveUpdate={handleVoiceLiveUpdate}
+                  onAutoQuery={handleVoiceAutoQuery}
+                  onListeningStateChange={handleVoiceListeningChange}
+                  disabled={loading}
+                />
                 <button
                   type="button"
                   className="send-circle-btn"

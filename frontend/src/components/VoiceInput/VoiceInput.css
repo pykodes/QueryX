@@ -1,0 +1,192 @@
+.voice-input-container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.mic-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 1.05rem;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  outline: none;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+html[data-theme='light'] .mic-btn {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: rgba(0, 0, 0, 0.04);
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.mic-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: white;
+  transform: scale(1.06);
+}
+
+html[data-theme='light'] .mic-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.25);
+  color: black;
+}
+
+.mic-btn.listening {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.28), rgba(220, 38, 38, 0.18));
+  border: 1px solid rgba(239, 68, 68, 0.8);
+  color: #ffffff;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.5);
+  animation: micPulse 1.6s infinite ease-in-out;
+}
+
+html[data-theme='light'] .mic-btn.listening {
+  background: rgba(254, 226, 226, 0.95);
+  border-color: #ef4444;
+  color: #dc2626;
+}
+
+@keyframes micPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+.mic-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.rec-badge {
+  position: absolute;
+  top: 0px;
+  right: 0px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ef4444;
+  border: 1.5px solid #212121;
+  box-shadow: 0 0 6px #ef4444;
+  animation: recBlink 1.2s infinite ease-in-out;
+  z-index: 2;
+}
+
+html[data-theme='light'] .rec-badge {
+  border-color: #ffffff;
+}
+
+@keyframes recBlink {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+}
+
+.proc-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #38bdf8;
+  border-radius: 50%;
+  animation: micSpin 0.7s linear infinite;
+}
+
+@keyframes micSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.mic-btn-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Floating Non-intrusive Error Toast */
+.voice-error-toast {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  min-width: 250px;
+  max-width: 320px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #1e1315;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  z-index: 100;
+  cursor: pointer;
+  animation: toastSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html[data-theme='light'] .voice-error-toast {
+  background: #fef2f2;
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #991b1b;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.toast-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.toast-text {
+  flex: 1;
+  font-weight: 500;
+}
+
+.toast-dismiss {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 0 2px;
+}
+
+.toast-dismiss:hover {
+  opacity: 1;
+}
