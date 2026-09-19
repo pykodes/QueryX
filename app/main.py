@@ -3,13 +3,13 @@ import time
 from pathlib import Path
 import sqlite3
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from app.sql_validator import validate_sql
 from app.llm import get_llm
-from app.services import QueryService, SchemaService, ChartService
+from app.services import QueryService, SchemaService, ChartService, DatasetService
 
 
 app = FastAPI(title="QueryX API", version="1.0.0")
@@ -41,7 +41,7 @@ DB_PATH = BASE_DIR / "database" / "company.db"
 
 schema_service = SchemaService()
 chart_service = ChartService()
-
+dataset_service = DatasetService(DB_PATH)
 
 # REQUEST MODEL
 
@@ -198,6 +198,51 @@ def process_question(question: str, provider: str | None = None) -> dict:
 # API ROUTES
 
 @app.post("/ask", response_model=QueryResponse)
+@app.post("/api/upload")
+async def upload_dataset(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected.")
+
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only CSV files are supported."
+        )
+
+    temp_file = None
+
+    try:
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".csv"
+        ) as temp:
+            temp.write(await file.read())
+            temp_file = temp.name
+
+        result = dataset_service.import_csv(
+            temp_file,
+            "uploaded_data"
+        )
+
+        return {
+            "message": "Dataset uploaded successfully.",
+            "table_name": result["table_name"],
+            "columns": result["columns"],
+            "row_count": result["row_count"],
+        }
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
+
+    finally:
+        if temp_file:
+            from pathlib import Path
+            Path(temp_file).unlink(missing_ok=True)
 @app.post("/api/ask", response_model=QueryResponse)
 def ask_database(request: QuestionRequest):
     result = process_question(request.question, request.provider)
