@@ -1,9 +1,58 @@
+import { useState } from 'react'
+import { uploadDataset } from '../../services/api'
+
 function AIChat() {
+  const [selectedFile, setSelectedFile] = useState(null)
+  const [uploadStatus, setUploadStatus] = useState('')
+  const [isUploading, setIsUploading] = useState(false)
   return (
     <div style={styles.chatPanel}>
       <div style={styles.header}>AI Assistant</div>
       <div style={styles.bubble}>I reviewed your latest query and found 2 anomalies in the sales cohort.</div>
       <div style={styles.reply}>Would you like me to generate a deeper breakdown?</div>
+      <div style={styles.uploadRow}>
+  <input
+    type="file"
+    accept=".csv"
+    onChange={(event) => {
+      const file = event.target.files?.[0] || null
+      setSelectedFile(file)
+      setUploadStatus('')
+    }}
+  />
+
+  <button
+  type="button"
+  style={styles.uploadButton}
+  disabled={!selectedFile || isUploading}
+  onClick={async () => {
+    if (!selectedFile) return
+
+    setIsUploading(true)
+    setUploadStatus('Uploading dataset...')
+
+    try {
+      const result = await uploadDataset(selectedFile)
+
+      setUploadStatus(
+        `✓ Dataset uploaded successfully. ${result.row_count} rows imported.`
+      )
+    } catch (error) {
+      setUploadStatus(`✗ Upload failed: ${error.message}`)
+    } finally {
+      setIsUploading(false)
+    }
+  }}
+>
+  {isUploading ? 'Uploading...' : 'Upload CSV'}
+</button>
+</div>
+
+{uploadStatus && (
+  <div style={styles.uploadStatus}>
+    {uploadStatus}
+  </div>
+)}
       <div style={styles.inputRow}>
         <input style={styles.input} placeholder="Ask QueryX..." />
         <button style={styles.sendButton} type="button">Send</button>
@@ -37,6 +86,28 @@ const styles = {
     marginLeft: 'auto',
     maxWidth: '80%',
     marginBottom: '18px',
+  },
+  uploadRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    marginBottom: '10px',
+  },
+
+  uploadButton: {
+    border: 'none',
+    borderRadius: '10px',
+    background: '#334155',
+    color: '#f8fafc',
+    fontWeight: 600,
+    padding: '10px 14px',
+    cursor: 'pointer',
+  },
+
+  uploadStatus: {
+    marginBottom: '14px',
+    color: '#cbd5e1',
+    fontSize: '14px',
   },
   inputRow: { display: 'flex', alignItems: 'center', gap: '10px' },
   input: {

@@ -81,10 +81,54 @@ export async function getSchema() {
   return request('/api/schema')
 }
 
+/**
+ * Upload a CSV dataset to the backend
+ */
+export async function uploadDataset(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const url = `${API_BASE_URL}/api/upload`
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      body: formData,
+    })
+
+    const data = await response.json().catch(() => ({}))
+
+    if (!response.ok) {
+      const message =
+        data.error ||
+        data.detail ||
+        `Server returned ${response.status} (${response.statusText})`
+
+      const error = new Error(message)
+      error.status = response.status
+      error.data = data
+      throw error
+    }
+
+    return data
+  } catch (err) {
+    if (err.name === 'TypeError' && err.message.includes('fetch')) {
+      throw new Error(
+        `Cannot connect to QueryX backend at ${
+          API_BASE_URL || 'http://127.0.0.1:8000'
+        }. Please ensure FastAPI is running.`
+      )
+    }
+
+    throw err
+  }
+}
+
 export default {
   checkHealth,
   getSampleQuestions,
   askQuestion,
   getSchema,
+  uploadDataset,
   API_BASE_URL,
 }
