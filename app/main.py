@@ -267,10 +267,11 @@ async def upload_dataset(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected.")
 
-    if not file.filename.lower().endswith(".csv"):
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in {".csv", ".xml", ".xls", ".xlsx"}:
         raise HTTPException(
             status_code=400,
-            detail="Only CSV files are supported."
+            detail="Supported files are CSV, XML, XLS, and XLSX."
         )
 
     temp_file = None
@@ -280,12 +281,12 @@ async def upload_dataset(file: UploadFile = File(...)):
 
         with tempfile.NamedTemporaryFile(
             delete=False,
-            suffix=".csv"
+            suffix=suffix
         ) as temp:
             temp.write(await file.read())
             temp_file = temp.name
 
-        result = dataset_service.import_csv(
+        result = dataset_service.import_file(
             temp_file,
             "uploaded_data"
         )
@@ -305,7 +306,6 @@ async def upload_dataset(file: UploadFile = File(...)):
 
     finally:
         if temp_file:
-            from pathlib import Path
             Path(temp_file).unlink(missing_ok=True)
 
 
@@ -338,15 +338,23 @@ async def upload_database(
         raise HTTPException(status_code=401, detail="Please sign in again")
 
     suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in {".db", ".sqlite", ".sqlite3"}:
-        raise HTTPException(status_code=400, detail="Upload a SQLite database (.db, .sqlite, or .sqlite3)")
+    supported_suffixes = {".csv", ".xml", ".xls", ".xlsx", ".db", ".sqlite", ".sqlite3"}
+    if suffix not in supported_suffixes:
+        raise HTTPException(
+            status_code=400,
+            detail="Supported files are CSV, XML, XLS, XLSX, DB, SQLITE, and SQLITE3",
+        )
 
     database_id = uuid.uuid4().hex
-    database_path = USER_DATABASE_DIR / f"user_{user.id}_{database_id}{suffix}"
-    with database_path.open("wb") as destination:
+    database_path = USER_DATABASE_DIR / f"user_{user.id}_{database_id}.db"
+    source_path = database_path if suffix in {".db", ".sqlite", ".sqlite3"} else USER_DATABASE_DIR / f"upload_{database_id}{suffix}"
+    with source_path.open("wb") as destination:
         shutil.copyfileobj(file.file, destination)
 
     try:
+        if suffix in {".csv", ".xml", ".xls", ".xlsx"}:
+            DatasetService(database_path).import_file(source_path, "uploaded_data")
+
         connection = get_database_connection(database_path)
         table_count = connection.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -369,6 +377,9 @@ async def upload_database(
         if isinstance(error, ValueError):
             raise HTTPException(status_code=400, detail=str(error)) from error
         raise
+    finally:
+        if source_path != database_path:
+            source_path.unlink(missing_ok=True)
 # USER AUTHENTICATION & HISTORY ROUTES
 
 @app.post("/api/auth/register")

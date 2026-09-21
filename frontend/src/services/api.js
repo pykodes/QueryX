@@ -136,7 +136,7 @@ export async function getSchema(databaseId = 'sample', userId = null) {
 }
 
 /**
- * Upload a CSV dataset to the backend
+ * Upload a tabular dataset to the backend
  */
 export async function uploadDataset(file) {
   const formData = new FormData()

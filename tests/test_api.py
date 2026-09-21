@@ -1,11 +1,93 @@
+import io
 import sqlite3
 from uuid import uuid4
 
 import pytest
+from openpyxl import Workbook
 from fastapi.testclient import TestClient
 from app.main import app
 
 client = TestClient(app)
+
+
+def test_dataset_upload_accepts_csv_xml_and_xlsx():
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(["name", "value"])
+    worksheet.append(["Excel", 3])
+    excel_file = io.BytesIO()
+    workbook.save(excel_file)
+
+    uploads = [
+        ("records.csv", b"name,value\nCSV,1\n", "text/csv"),
+        ("records.xml", b"<records><record><name>XML</name><value>2</value></record></records>", "application/xml"),
+        ("records.xlsx", excel_file.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    ]
+
+    for filename, content, content_type in uploads:
+        response = client.post(
+            "/api/upload",
+            files={"file": (filename, content, content_type)},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["row_count"] == 1
+
+
+def test_tabular_database_upload_is_converted_to_sqlite():
+    unique_id = uuid4().hex
+    user = client.post(
+        "/api/auth/register",
+        json={
+            "fullName": f"Tabular Owner {unique_id}",
+            "email": f"tabular-owner-{unique_id}@example.com",
+            "password": "DatabasePass123!",
+        },
+    ).json()
+
+    response = client.post(
+        "/api/databases/upload",
+        data={"user_id": str(user["id"])},
+        files={"file": ("records.csv", b"name,value\nCSV,1\n", "text/csv")},
+    )
+    assert response.status_code == 200, response.text
+
+    schema = client.get(
+        f"/api/schema?database_id={response.json()['id']}&user_id={user['id']}"
+    )
+    assert schema.status_code == 200
+    assert "uploaded_data" in schema.json()["schema"]
+
+
+def test_db_database_upload_is_supported():
+    unique_id = uuid4().hex
+    user = client.post(
+        "/api/auth/register",
+        json={
+            "fullName": f"SQLite Owner {unique_id}",
+            "email": f"sqlite-owner-{unique_id}@example.com",
+            "password": "DatabasePass123!",
+        },
+    ).json()
+
+    temporary_path = "tests_native_upload.db"
+    disk_database = sqlite3.connect(temporary_path)
+    disk_database.execute("CREATE TABLE orders (order_id INTEGER, total INTEGER)")
+    disk_database.execute("INSERT INTO orders VALUES (1, 250)")
+    disk_database.commit()
+    disk_database.close()
+    try:
+        with open(temporary_path, "rb") as database_file:
+            response = client.post(
+                "/api/databases/upload",
+                data={"user_id": str(user["id"])},
+                files={"file": ("orders.db", database_file, "application/x-sqlite3")},
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["name"] == "orders"
+    finally:
+        import os
+
+        os.remove(temporary_path)
 
 
 def test_api_health():

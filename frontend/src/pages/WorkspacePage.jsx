@@ -882,10 +882,10 @@ function WorkspacePage({
               </div>
               {user?.id && (
                 <label className="sidebar-item database-upload-label">
-                  <span>{databaseUploadLoading ? 'Adding database...' : '+ Add SQLite database'}</span>
+                  <span>{databaseUploadLoading ? 'Adding database...' : '+ Add database'}</span>
                   <input
                     type="file"
-                    accept=".db,.sqlite,.sqlite3"
+                    accept=".csv,.xml,.xls,.xlsx,.db,.sqlite,.sqlite3"
                     onChange={handleDatabaseUpload}
                     disabled={databaseUploadLoading}
                     hidden

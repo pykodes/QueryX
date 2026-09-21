@@ -397,4 +397,4 @@ const VoiceInput = forwardRef(function VoiceInput(
   );
 });
 
-export default VoiceInput;
+export default VoiceInput; 

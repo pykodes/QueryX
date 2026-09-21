@@ -13,7 +13,7 @@ function AIChat() {
       <div style={styles.uploadRow}>
   <input
     type="file"
-    accept=".csv"
+    accept=".csv,.xml,.xls,.xlsx"
     onChange={(event) => {
       const file = event.target.files?.[0] || null
       setSelectedFile(file)
@@ -44,7 +44,7 @@ function AIChat() {
     }
   }}
 >
-  {isUploading ? 'Uploading...' : 'Upload CSV'}
+  {isUploading ? 'Uploading...' : 'Upload dataset'}
 </button>
 </div>
 
