@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from google import genai
+import google.generativeai as genai
 
 from app.llm.base import BaseLLM
 
@@ -15,15 +15,14 @@ class GeminiLLM(BaseLLM):
             raise ValueError(
                 "GEMINI_API_KEY is not set. Please provide it or set it in .env"
             )
-        self.model = model or os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-        self.client = genai.Client(api_key=self.api_key)
+        # Configure the generative AI client
+        genai.configure(api_key=self.api_key)
+        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        self.model = genai.GenerativeModel(self.model_name)
 
     def generate(self, prompt: str) -> str:
         try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-            )
+            response = self.model.generate_content(prompt)
             return response.text or ""
         except Exception as e:
-            raise RuntimeError(f"Gemini API error ({self.model}): {e}") from e
+            raise RuntimeError(f"Gemini API error ({self.model_name}): {e}") from e

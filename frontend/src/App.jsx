@@ -40,7 +40,8 @@ const getInitialUser = () => {
 
   try {
     const savedUser = window.localStorage.getItem('queryx-user')
-    return savedUser ? JSON.parse(savedUser) : null
+    const parsedUser = savedUser ? JSON.parse(savedUser) : null
+    return parsedUser?.id ? parsedUser : null
   } catch (error) {
     console.error('Failed to parse saved user', error)
     return null

@@ -1,22 +1,7 @@
 import re
 
-from pydantic import BaseModel, ConfigDict
 
-
-class SQLValidationResult(BaseModel):
-    """
-    Represents the result of SQL validation.
-    """
-
-    model_config = ConfigDict(
-        extra="forbid"
-    )
-
-    is_valid: bool
-    message: str
-
-
-def validate_sql(sql: str) -> SQLValidationResult:
+def validate_sql(sql: str) -> tuple[bool, str]:
     """
     Validate an SQL query.
 
@@ -26,10 +11,7 @@ def validate_sql(sql: str) -> SQLValidationResult:
 
     # Check empty SQL
     if not sql or not sql.strip():
-        return SQLValidationResult(
-            is_valid=False,
-            message="SQL query cannot be empty"
-        )
+        return False, "SQL query cannot be empty"
 
     query = sql.strip()
 
@@ -46,17 +28,11 @@ def validate_sql(sql: str) -> SQLValidationResult:
         query_without_final_semicolon,
         re.IGNORECASE
     ):
-        return SQLValidationResult(
-            is_valid=False,
-            message="Only SELECT queries are allowed"
-        )
+        return False, "Only SELECT queries are allowed"
 
     # Prevent multiple SQL statements
     if ";" in query_without_final_semicolon:
-        return SQLValidationResult(
-            is_valid=False,
-            message="Multiple SQL statements are not allowed"
-        )
+        return False, "Multiple SQL statements are not allowed"
 
     # Dangerous SQL operations
     dangerous_keywords = [
@@ -82,12 +58,6 @@ def validate_sql(sql: str) -> SQLValidationResult:
             query_without_final_semicolon,
             re.IGNORECASE
         ):
-            return SQLValidationResult(
-                is_valid=False,
-                message=f"Forbidden SQL keyword: {keyword}"
-            )
+            return False, f"Forbidden SQL keyword: {keyword}"
 
-    return SQLValidationResult(
-        is_valid=True,
-        message="SQL query is valid"
-    )
+    return True, "SQL query is valid"

@@ -61,15 +61,67 @@ export async function getSampleQuestions() {
   return request('/api/sample-questions')
 }
 
+export async function getDatabases(userId) {
+  const query = userId ? `?user_id=${encodeURIComponent(userId)}` : ''
+  return request(`/api/databases${query}`)
+}
+
+export async function uploadDatabase(file, userId) {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('user_id', String(userId))
+  const response = await fetch(`${API_BASE_URL}/api/databases/upload`, {
+    method: 'POST',
+    body: formData,
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.detail || `Database upload failed (${response.status})`)
+  return data
+}
+
+/**
+/**
+ * Register user in database
+ */
+export async function registerUser(fullName, email, password) {
+  return request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ fullName, email, password }),
+  })
+}
+
+/**
+ * Login user
+ */
+export async function loginUser(email, password) {
+  return request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  })
+}
+
+/**
+ * Fetch stored query history for user
+ */
+export async function getQueryHistory(userId, userEmail = null) {
+  const params = new URLSearchParams()
+  if (userId) params.set('user_id', userId)
+  if (userEmail) params.set('user_email', userEmail)
+  return request(`/api/history?${params.toString()}`)
+}
+
 /**
  * Submit natural language query to backend
  */
-export async function askQuestion(question, provider = null) {
+export async function askQuestion(question, provider = null, userId = null, userEmail = null, databaseId = 'sample') {
   return request('/api/ask', {
     method: 'POST',
     body: JSON.stringify({
       question,
       provider: provider || undefined,
+      user_id: userId || undefined,
+      user_email: userEmail || undefined,
+      database_id: databaseId,
     }),
   })
 }
@@ -77,8 +129,10 @@ export async function askQuestion(question, provider = null) {
 /**
  * Fetch database schema information
  */
-export async function getSchema() {
-  return request('/api/schema')
+export async function getSchema(databaseId = 'sample', userId = null) {
+  const params = new URLSearchParams({ database_id: String(databaseId) })
+  if (userId) params.set('user_id', String(userId))
+  return request(`/api/schema?${params.toString()}`)
 }
 
 /**
@@ -127,8 +181,13 @@ export async function uploadDataset(file) {
 export default {
   checkHealth,
   getSampleQuestions,
+  getDatabases,
+  uploadDatabase,
   askQuestion,
   getSchema,
   uploadDataset,
+  registerUser,
+  loginUser,
+  getQueryHistory,
   API_BASE_URL,
 }

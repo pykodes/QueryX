@@ -1,12 +1,19 @@
-import { useState, useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from 'react'
-import { useSpeechRecognition } from '../../hooks/useSpeechRecognition'
-import './VoiceInput.css'
+import {
+  useEffect,
+  useRef,
+  useImperativeHandle,
+  useCallback,
+  forwardRef,
+} from 'react';
+
+import useSpeechRecognition from '../../hooks/useSpeechRecognition';
+import './VoiceInput.css';
 
 const VoiceInput = forwardRef(function VoiceInput(
   {
     onCommit,
-    onLiveUpdate,   // NEW: called on every interim+final update → shows text in input live
-    onAutoQuery,    // NEW: called after pause detected → auto-submits to LLM
+    onLiveUpdate,
+    onAutoQuery,
     currentValue = '',
     disabled = false,
     lang = 'en-IN',
@@ -14,8 +21,24 @@ const VoiceInput = forwardRef(function VoiceInput(
   },
   ref
 ) {
-  const [livePreview, setLivePreview] = useState('')
-  const pauseTimerRef = useRef(null)   // auto-submit timer
+  // --------------------------------------------------
+  // Refs
+  // --------------------------------------------------
+
+  const pauseTimerRef = useRef(null);
+
+  // Prevent the same voice query from being submitted twice
+  const hasSubmittedRef = useRef(false);
+
+  // Prevent submission while another submission is already happening
+  const submittingRef = useRef(false);
+
+  // Keep the latest accumulated transcript
+  const accumulatedTextRef = useRef('');
+
+  // --------------------------------------------------
+  // Speech recognition
+  // --------------------------------------------------
 
   const {
     isSupported,
@@ -25,20 +48,106 @@ const VoiceInput = forwardRef(function VoiceInput(
     startListening,
     stopListening,
     setError,
-  } = useSpeechRecognition({ defaultLang: lang })
+  } = useSpeechRecognition({
+    defaultLang: lang,
+  });
+
+  // --------------------------------------------------
+  // Clear pause timer
+  // --------------------------------------------------
+
+  const clearPauseTimer = useCallback(() => {
+    if (pauseTimerRef.current) {
+      clearTimeout(pauseTimerRef.current);
+      pauseTimerRef.current = null;
+    }
+  }, []);
+
+  // --------------------------------------------------
+  // SINGLE SUBMISSION PIPELINE
+  // --------------------------------------------------
+
+  const submitOnce = useCallback(
+    (text) => {
+      const cleanedText = (text || '').trim();
+
+      // Nothing to submit
+      if (!cleanedText) {
+        return false;
+      }
+
+      // Already submitted this recording
+      if (hasSubmittedRef.current) {
+        console.log('[VoiceInput] Duplicate submission blocked:', cleanedText);
+        return false;
+      }
+
+      // Submission already in progress
+      if (submittingRef.current) {
+        console.log('[VoiceInput] Submission already in progress');
+        return false;
+      }
+
+      // ------------------------------------------------
+      // LOCK BEFORE calling parent
+      // ------------------------------------------------
+
+      hasSubmittedRef.current = true;
+      submittingRef.current = true;
+
+      clearPauseTimer();
+
+      console.log('[VoiceInput] SUBMIT ONCE:', cleanedText);
+
+      try {
+        // Use ONE submission callback.
+        //
+        // Prefer onAutoQuery if it is responsible for sending
+        // the query to the LLM.
+        if (onAutoQuery) {
+          onAutoQuery(cleanedText);
+        } else if (onCommit) {
+          onCommit(cleanedText);
+        }
+      } finally {
+        submittingRef.current = false;
+      }
+
+      return true;
+    },
+    [onAutoQuery, onCommit, clearPauseTimer]
+  );
+
+  // --------------------------------------------------
+  // Stop listening
+  // --------------------------------------------------
 
   const handleStop = useCallback(() => {
-    // Clear any pending auto-submit timer
-    if (pauseTimerRef.current) {
-      clearTimeout(pauseTimerRef.current)
-      pauseTimerRef.current = null
+    clearPauseTimer();
+
+    const finalText = stopListening();
+
+    console.log('[VoiceInput] stopListening returned:', finalText);
+
+    /*
+     * IMPORTANT:
+     *
+     * Do NOT call onCommit() here separately if the speech
+     * recognition hook already fires onFinal.
+     *
+     * We use the returned text only as a fallback.
+     */
+
+    if (finalText) {
+      accumulatedTextRef.current = finalText;
     }
-    const finalText = stopListening()
-    setLivePreview('')
-    if (finalText && onCommit) {
-      onCommit(finalText)
-    }
-  }, [stopListening, onCommit])
+
+    return finalText;
+  }, [stopListening, clearPauseTimer]);
+
+  // --------------------------------------------------
+  // Expose stop() to parent
+  // --------------------------------------------------
 
   useImperativeHandle(
     ref,
@@ -46,80 +155,171 @@ const VoiceInput = forwardRef(function VoiceInput(
       stop: handleStop,
     }),
     [handleStop]
-  )
+  );
 
-  // Notify parent of listening state changes only — not on every interim word
-  // This prevents WorkspacePage from re-rendering when just the mic preview updates
+  // --------------------------------------------------
+  // Listening state notification
+  // --------------------------------------------------
+
   useEffect(() => {
     if (onListeningStateChange) {
-      onListeningStateChange(isListening)
+      onListeningStateChange(isListening);
     }
-  }, [isListening, onListeningStateChange])
+  }, [isListening, onListeningStateChange]);
 
-  // Automatically stop listening if query starts executing / loading
+  // --------------------------------------------------
+  // Automatically stop when disabled
+  // --------------------------------------------------
+
   useEffect(() => {
     if (disabled && isListening) {
-      handleStop()
+      handleStop();
     }
-  }, [disabled, isListening, handleStop])
+  }, [disabled, isListening, handleStop]);
 
-  // Auto-clear error toast after 4.5 seconds
+  // --------------------------------------------------
+  // Clear speech recognition error
+  // --------------------------------------------------
+
   useEffect(() => {
-    if (error) {
-      const timer = setTimeout(() => {
-        setError(null)
-      }, 4500)
-      return () => clearTimeout(timer)
-    }
-  }, [error, setError])
+    if (!error) return;
+
+    const timer = setTimeout(() => {
+      setError(null);
+    }, 4500);
+
+    return () => clearTimeout(timer);
+  }, [error, setError]);
+
+  // --------------------------------------------------
+  // Microphone click
+  // --------------------------------------------------
 
   const handleMicClick = useCallback(() => {
-    if (disabled) return
+    if (disabled) {
+      return;
+    }
+
+    // -----------------------------------------------
+    // STOP RECORDING
+    // -----------------------------------------------
 
     if (isListening) {
-      handleStop()
-    } else {
-      setLivePreview(currentValue)
-      startListening({
-        lang,
-        initialText: currentValue,
+      clearPauseTimer();
 
-        // onFinal: confirmed speech fragment received
-        // → update local preview, update main input live, start pause timer
-        onFinal: (accumulatedText) => {
-          setLivePreview(accumulatedText)
+      const finalText = handleStop();
 
-          // Push confirmed text to the main input immediately
-          if (onLiveUpdate) onLiveUpdate(accumulatedText)
+      /*
+       * If the recognition hook does NOT fire onFinal when
+       * manually stopped, use the returned text as fallback.
+       *
+       * submitOnce() protects us from duplicate submission.
+       */
 
-          // Pause detection: 1.5s after last confirmed word → auto-submit
-          if (onAutoQuery) {
-            if (pauseTimerRef.current) clearTimeout(pauseTimerRef.current)
-            pauseTimerRef.current = setTimeout(() => {
-              pauseTimerRef.current = null
-              // Stop mic first, then execute with the committed text
-              const committed = stopListening()
-              setLivePreview('')
-              const textToSend = committed || accumulatedText
-              if (textToSend) onAutoQuery(textToSend)
-            }, 1500)
-          }
-        },
+      const textToSend = (
+        finalText ||
+        accumulatedTextRef.current ||
+        currentValue ||
+        ''
+      ).trim();
 
-        // onInterim: partial speech (not yet confirmed) → show live in input
-        onInterim: (_interimFragment, fullCombined) => {
-          setLivePreview(fullCombined)
-          // Update input with partial text so user can see what's being heard
-          if (onLiveUpdate) onLiveUpdate(fullCombined)
-          // Reset pause timer on new speech activity
-          if (pauseTimerRef.current) {
-            clearTimeout(pauseTimerRef.current)
-            pauseTimerRef.current = null
-          }
-        },
-      })
+      if (textToSend) {
+        submitOnce(textToSend);
+      }
+
+      return;
     }
-  }, [disabled, isListening, handleStop, currentValue, lang, startListening, onLiveUpdate, onAutoQuery, stopListening])
+
+    // -----------------------------------------------
+    // START RECORDING
+    // -----------------------------------------------
+
+    clearPauseTimer();
+
+    // New recording = allow one new submission
+    hasSubmittedRef.current = false;
+    submittingRef.current = false;
+
+    accumulatedTextRef.current = currentValue || '';
+
+    console.log('[VoiceInput] Starting new recording');
+
+    startListening({
+      lang,
+      initialText: currentValue,
+
+      // ---------------------------------------------
+      // FINAL SPEECH
+      // ---------------------------------------------
+
+      onFinal: (accumulatedText) => {
+        const finalText = (accumulatedText || '').trim();
+
+        accumulatedTextRef.current = finalText;
+
+        console.log('[VoiceInput] FINAL:', finalText);
+
+        /*
+         * IMPORTANT:
+         *
+         * There is now ONLY ONE place where automatic
+         * pause submission happens.
+         */
+
+        clearPauseTimer();
+
+        if (!finalText) {
+          return;
+        }
+
+        pauseTimerRef.current = setTimeout(() => {
+          pauseTimerRef.current = null;
+
+          console.log(
+            '[VoiceInput] Pause detected. Auto submitting:',
+            finalText
+          );
+
+          submitOnce(finalText);
+        }, 2500);
+      },
+
+      // ---------------------------------------------
+      // INTERIM SPEECH
+      // ---------------------------------------------
+
+      onInterim: (interimFragment, fullCombined) => {
+        const liveText = (fullCombined || interimFragment || '').trim();
+
+        accumulatedTextRef.current = liveText;
+
+        if (onLiveUpdate) {
+          onLiveUpdate(liveText);
+        }
+
+        /*
+         * User is speaking again.
+         * Cancel the previous pause timer.
+         */
+
+        clearPauseTimer();
+      },
+    });
+  }, [
+    disabled,
+    isListening,
+    currentValue,
+    lang,
+    startListening,
+    handleStop,
+    submitOnce,
+    clearPauseTimer,
+    onLiveUpdate,
+  ]);
+
+  // --------------------------------------------------
+  // Unsupported browser
+  // --------------------------------------------------
 
   if (!isSupported) {
     return (
@@ -131,34 +331,62 @@ const VoiceInput = forwardRef(function VoiceInput(
       >
         🎙️
       </button>
-    )
+    );
   }
+
+  // --------------------------------------------------
+  // UI
+  // --------------------------------------------------
 
   return (
     <div className="voice-input-container">
+
       {error && (
-        <div className="voice-error-toast" role="alert" onClick={() => setError(null)}>
-          <span className="toast-icon">⚠️</span>
-          <span className="toast-text">{error}</span>
-          <button type="button" className="toast-dismiss">✕</button>
+        <div
+          className="voice-error-toast"
+          role="alert"
+          onClick={() => setError(null)}
+        >
+          <span className="toast-icon">⚠</span>
+
+          <span className="toast-text">
+            {error}
+          </span>
+
+          <button
+            type="button"
+            className="toast-dismiss"
+            onClick={() => setError(null)}
+          >
+            ×
+          </button>
         </div>
       )}
 
       <button
         type="button"
-        className={`mic-btn ${isListening ? 'listening' : ''} ${status === 'processing' ? 'processing' : ''}`}
+        className={`mic-btn ${isListening ? 'listening' : ''
+          } ${status === 'processing' ? 'processing' : ''
+          }`}
         onClick={handleMicClick}
-        disabled={disabled}
+        disabled={disabled || status === 'processing'}
         title={
           isListening
             ? 'Listening... Click to stop recording'
             : status === 'processing'
-            ? 'Processing speech...'
-            : 'Click for voice input (en-IN)'
+              ? 'Processing speech...'
+              : 'Click for voice input (en-IN)'
         }
-        aria-label={isListening ? 'Stop voice recording' : 'Start voice recording'}
+        aria-label={
+          isListening
+            ? 'Stop voice recording'
+            : 'Start voice recording'
+        }
       >
-        {isListening && <span className="rec-badge" />}
+        {isListening && (
+          <span className="rec-badge" />
+        )}
+
         {status === 'processing' ? (
           <span className="proc-spinner" />
         ) : (
@@ -166,7 +394,7 @@ const VoiceInput = forwardRef(function VoiceInput(
         )}
       </button>
     </div>
-  )
-})
+  );
+});
 
-export default VoiceInput
+export default VoiceInput;

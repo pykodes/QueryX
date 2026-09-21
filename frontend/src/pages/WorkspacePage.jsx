@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef, useCallback, memo } from 'react'
-import { checkHealth, getSampleQuestions, askQuestion } from '../services/api.js'
+import { checkHealth, getSampleQuestions, askQuestion, getQueryHistory, getDatabases, getSchema, uploadDatabase } from '../services/api.js'
 import VisualizationCard from '../components/VisualizationCard/VisualizationCard'
 import { analyzeQueryResult } from '../components/VisualizationCard/ChartAnalyzer'
 import VoiceInput from '../components/VoiceInput/VoiceInput'
+/* eslint-disable react/immutability */
 
 /**
  * ChatTurn — memoized so it only re-renders when its own exchange data changes.
@@ -152,6 +153,7 @@ function WorkspacePage({
   const chatStreamRef = useRef(null)
   const chatEndRef = useRef(null)
   const voiceInputRef = useRef(null)
+  const textareaRef = useRef(null)
 
   // Stable callbacks for VoiceInput — defined once, never recreated
   const handleVoiceCommit = useCallback((finalText) => setQuestion(finalText), [])
@@ -198,6 +200,17 @@ function WorkspacePage({
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState('ask')
   const [recentChats, setRecentChats] = useState([])
+  const [databases, setDatabases] = useState([{ id: 'sample', name: 'QueryX Sample Database', type: 'sample' }])
+  const [selectedDatabaseId, setSelectedDatabaseId] = useState('sample')
+  const [databasesLoading, setDatabasesLoading] = useState(true)
+  const [databaseUploadLoading, setDatabaseUploadLoading] = useState(false)
+  const [databaseError, setDatabaseError] = useState(null)
+  const [databaseMenuOpen, setDatabaseMenuOpen] = useState(false)
+  const databaseSelectorRef = useRef(null)
+  const [schemaOpen, setSchemaOpen] = useState(false)
+  const [schemaLoading, setSchemaLoading] = useState(false)
+  const [schemaError, setSchemaError] = useState(null)
+  const [databaseSchema, setDatabaseSchema] = useState({})
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showHelpModal, setShowHelpModal] = useState(false)
@@ -294,7 +307,7 @@ function WorkspacePage({
     'What is the employee distribution across work locations?',
   ])
 
-  const textareaRef = useRef(null)
+  const lastExecutedQueryRef = useRef({ text: '', time: 0 })
 
   // Fetch initial database health and sample questions
   useEffect(() => {
@@ -303,12 +316,12 @@ function WorkspacePage({
       .then((data) => {
         const elapsed = Math.round(performance.now() - startTime)
         if (data.status === 'healthy') {
-          setDbStatus({
+          setDbStatus((current) => ({
+            ...current,
             connected: true,
-            dbName: 'company.db',
             engine: 'SQLite 3',
             latency: `${elapsed || 8}ms`,
-          })
+          }))
         }
       })
       .catch(() => {
@@ -323,6 +336,117 @@ function WorkspacePage({
       })
       .catch(() => {})
   }, [])
+
+  // Fetch stored query history for logged in user
+  useEffect(() => {
+    setRecentChats([])
+    if (user?.id) {
+      getQueryHistory(user.id, user.email)
+        .then((res) => {
+          const historyQuestions = Array.from(
+            new Set((res?.history || []).map((historyItem) => historyItem.question))
+          )
+          setRecentChats(historyQuestions)
+        })
+        .catch(() => {})
+    }
+  }, [user?.email, user?.id])
+
+  useEffect(() => {
+    let active = true
+    setDatabasesLoading(true)
+    setDatabaseError(null)
+    setDatabases([{ id: 'sample', name: 'QueryX Sample Database', type: 'sample' }])
+    setSelectedDatabaseId('sample')
+
+    getDatabases(user?.id)
+      .then((result) => {
+        if (!active) return
+        const availableDatabases = result.databases || []
+        setDatabases(availableDatabases)
+        const savedDatabaseId = user?.id
+          ? window.localStorage.getItem(`queryx-database-${user.id}`)
+          : null
+        const nextDatabase = availableDatabases.find(
+          (database) => String(database.id) === String(savedDatabaseId)
+        ) || availableDatabases[0]
+        if (nextDatabase) setSelectedDatabaseId(String(nextDatabase.id))
+      })
+      .catch((loadError) => {
+        if (!active) return
+        setDatabaseError(loadError.message || 'Unable to load databases')
+      })
+      .finally(() => {
+        if (active) setDatabasesLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [user?.id])
+
+  useEffect(() => {
+    if (user?.id && selectedDatabaseId) {
+      window.localStorage.setItem(`queryx-database-${user.id}`, String(selectedDatabaseId))
+    }
+    const selectedDatabase = databases.find(
+      (database) => String(database.id) === String(selectedDatabaseId)
+    )
+    if (selectedDatabase) {
+      setDbStatus((current) => ({ ...current, dbName: selectedDatabase.name }))
+    }
+  }, [databases, selectedDatabaseId, user?.id])
+
+  useEffect(() => {
+    const handleOutsideDatabaseClick = (event) => {
+      if (databaseSelectorRef.current && !databaseSelectorRef.current.contains(event.target)) {
+        setDatabaseMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleOutsideDatabaseClick)
+    return () => document.removeEventListener('mousedown', handleOutsideDatabaseClick)
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    setSchemaLoading(true)
+    setSchemaError(null)
+    getSchema(selectedDatabaseId, user?.id)
+      .then((result) => {
+        if (!active) return
+        if (result.error) throw new Error(result.error)
+        setDatabaseSchema(result.schema || {})
+      })
+      .catch((loadError) => {
+        if (!active) return
+        setDatabaseSchema({})
+        setSchemaError(loadError.message || 'Unable to load database schema')
+      })
+      .finally(() => {
+        if (active) setSchemaLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [selectedDatabaseId, user?.id])
+
+  const handleDatabaseUpload = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !user?.id) return
+    setDatabaseUploadLoading(true)
+    setDatabaseError(null)
+    try {
+      const database = await uploadDatabase(file, user.id)
+      setDatabases((current) => [database, ...current])
+      setSelectedDatabaseId(String(database.id))
+    } catch (uploadError) {
+      setDatabaseError(uploadError.message)
+    } finally {
+      setDatabaseUploadLoading(false)
+    }
+  }
 
   const EXPLICIT_VIZ_REGEX = /graph|visualize|visualization|chart|plot|graphically|visual representation|show data visually/i
 
@@ -350,15 +474,25 @@ function WorkspacePage({
   }, [])
 
   const executeQuery = async (queryText) => {
-    if (voiceInputRef.current && typeof voiceInputRef.current.stop === 'function') {
-      voiceInputRef.current.stop()
-    }
-
     let targetQuery = (queryText || question).trim()
     if (!targetQuery && attachedFile) {
       targetQuery = `Analyze attached file: ${attachedFile.name}`
     }
     if (!targetQuery || loading) return
+
+    // Guard against double execution within 2000ms
+    const now = Date.now()
+    if (
+      lastExecutedQueryRef.current.text === targetQuery &&
+      now - lastExecutedQueryRef.current.time < 2000
+    ) {
+      return
+    }
+    lastExecutedQueryRef.current = { text: targetQuery, time: now }
+
+    if (voiceInputRef.current && typeof voiceInputRef.current.stop === 'function') {
+      voiceInputRef.current.stop()
+    }
 
     const isExplicitVizReq = EXPLICIT_VIZ_REGEX.test(targetQuery)
 
@@ -381,7 +515,7 @@ function WorkspacePage({
       return [targetQuery, ...filtered]
     })
 
-    setQuestion('')
+    // setQuestion('') // moved to after loading completes
     setLoading(true)
     setError(null)
     scrollToBottom()
@@ -394,7 +528,7 @@ function WorkspacePage({
       if (activeAttached) {
         data = parseAttachedFile(activeAttached, targetQuery)
       } else {
-        data = await askQuestion(targetQuery)
+        data = await askQuestion(targetQuery, null, user?.id, user?.email, selectedDatabaseId)
       }
 
       if (data.error) {
@@ -420,7 +554,10 @@ function WorkspacePage({
       const message = err.message || 'Error processing request.'
       setError(message)
     } finally {
-      setLoading(false)
+      // Clear the input and reset voice listening state before ending loading
+      setQuestion('');
+      setIsVoiceListening(false);
+      setLoading(false);
     }
   }
 
@@ -511,6 +648,40 @@ function WorkspacePage({
 
   return (
     <div className="workspace-page">
+      {schemaOpen && (
+        <div className="schema-modal-overlay" role="dialog" aria-modal="true" aria-label="Database schema">
+          <section className="schema-modal">
+            <div className="schema-modal-header">
+              <div>
+                <div className="schema-modal-eyebrow">ACTIVE DATABASE</div>
+                <h2>{databases.find((database) => String(database.id) === String(selectedDatabaseId))?.name || 'Database schema'}</h2>
+              </div>
+              <button type="button" className="schema-modal-close" onClick={() => setSchemaOpen(false)} aria-label="Close schema">✕</button>
+            </div>
+            {schemaError ? (
+              <div className="schema-modal-error">{schemaError}</div>
+            ) : Object.keys(databaseSchema).length === 0 ? (
+              <div className="schema-modal-empty">No tables found in this database.</div>
+            ) : (
+              <div className="schema-table-list">
+                {Object.entries(databaseSchema).map(([tableName, columns]) => (
+                  <div className="schema-table-card" key={tableName}>
+                    <div className="schema-table-name">{tableName}</div>
+                    <div className="schema-column-list">
+                      {columns.map((column) => (
+                        <div className="schema-column-row" key={`${tableName}-${column.name}`}>
+                          <span>{column.name}</span>
+                          <span className="schema-column-type">{column.type || 'TEXT'}{column.pk ? ' · PK' : ''}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
       {/* GLOBAL ERROR POPUP TOAST — fixed position, always visible */}
       {error && (
         <div className="error-popup-overlay" role="alertdialog" aria-modal="false" aria-label="Error notification">
@@ -670,17 +841,86 @@ function WorkspacePage({
                     background: dbStatus.connected ? 'var(--workspace-success)' : '#ef4444',
                   }}
                 />
-                <span className="sidebar-db-name">{dbStatus.dbName}</span>
+                <div className="database-selector" ref={databaseSelectorRef}>
+                  <button
+                    type="button"
+                    className="sidebar-db-name database-selector-trigger"
+                    onClick={() => setDatabaseMenuOpen((open) => !open)}
+                    disabled={databasesLoading || databaseUploadLoading}
+                    aria-haspopup="listbox"
+                    aria-expanded={databaseMenuOpen}
+                  >
+                    <span className="database-selector-label">
+                      {databasesLoading
+                        ? 'Loading databases...'
+                        : databases.find((database) => String(database.id) === String(selectedDatabaseId))?.name || 'Select database'}
+                    </span>
+                    <span className="database-selector-chevron" aria-hidden="true">⌄</span>
+                  </button>
+                  {databaseMenuOpen && !databasesLoading && (
+                    <div className="database-selector-menu" role="listbox" aria-label="Available databases">
+                      {databases.map((database) => (
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={String(database.id) === String(selectedDatabaseId)}
+                          className={`database-selector-option ${String(database.id) === String(selectedDatabaseId) ? 'selected' : ''}`}
+                          key={database.id}
+                          onClick={() => {
+                            setSelectedDatabaseId(String(database.id))
+                            setDatabaseMenuOpen(false)
+                          }}
+                        >
+                          <span>{database.name}</span>
+                          <small>{database.type === 'personal' ? 'Personal' : 'Sample'}</small>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <span className="db-version">{dbStatus.engine}</span>
               </div>
+              {user?.id && (
+                <label className="sidebar-item database-upload-label">
+                  <span>{databaseUploadLoading ? 'Adding database...' : '+ Add SQLite database'}</span>
+                  <input
+                    type="file"
+                    accept=".db,.sqlite,.sqlite3"
+                    onChange={handleDatabaseUpload}
+                    disabled={databaseUploadLoading}
+                    hidden
+                  />
+                </label>
+              )}
+              {databaseError && (
+                <div className="sidebar-database-error" role="alert">
+                  {databaseError}
+                </div>
+              )}
+              <button
+                type="button"
+                className="sidebar-item database-schema-button"
+                onClick={() => setSchemaOpen(true)}
+                disabled={schemaLoading}
+              >
+                {schemaLoading ? 'Loading schema...' : 'View database schema'}
+              </button>
             </div>
           </div>
 
           <div className="sidebar-group sidebar-group-recent">
-            <div className="sidebar-label">RECENT</div>
+            <div className="recent-history-header">
+              <div className="sidebar-label">RECENT SEARCHES</div>
+              {recentChats.length > 0 && (
+                <span className="recent-history-count">{recentChats.length}</span>
+              )}
+            </div>
             <div className="sidebar-recent-scroll">
               {recentChats.length === 0 ? (
-                <div className="sidebar-empty-recent">No recent chats</div>
+                <div className="sidebar-empty-recent">
+                  <span className="recent-empty-icon">⌕</span>
+                  <span>Your recent searches will appear here</span>
+                </div>
               ) : (
                 recentChats.map((chat, idx) => (
                   <button
@@ -690,7 +930,7 @@ function WorkspacePage({
                     title={chat}
                     onClick={() => handlePromptClick(chat)}
                   >
-                    <span className="chat-icon">💬</span>
+                    <span className="chat-icon">↗</span>
                     <span className="recent-chat-text">{chat}</span>
                   </button>
                 ))
@@ -795,9 +1035,12 @@ function WorkspacePage({
               </div>
             )}
 
-            <div
+            <button
+              type="button"
               className={`sidebar-profile-box ${profileMenuOpen ? 'is-active' : ''}`}
               onClick={() => setProfileMenuOpen((prev) => !prev)}
+              aria-label={`${userName} profile menu`}
+              aria-expanded={profileMenuOpen}
             >
               <div className="profile-box-avatar">{userInitial}</div>
               <div className="profile-box-info">
@@ -805,7 +1048,7 @@ function WorkspacePage({
                 <div className="profile-box-plan">{userPlan}</div>
               </div>
               <div className="profile-box-store-icon">🏪</div>
-            </div>
+            </button>
           </div>
         </aside>
 

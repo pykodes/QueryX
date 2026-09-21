@@ -1,3 +1,6 @@
+import sqlite3
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
@@ -97,3 +100,174 @@ def test_ask_endpoint_empty_question():
         json={"question": "   "},
     )
     assert response.status_code == 422  # Pydantic validation error
+
+
+def test_logged_in_user_owns_query_history():
+    unique_id = uuid4().hex
+    email = f"history-{unique_id}@example.com"
+    password = "HistoryPass123!"
+
+    registration = client.post(
+        "/api/auth/register",
+        json={
+            "fullName": f"History User {unique_id}",
+            "email": email,
+            "password": password,
+        },
+    )
+    assert registration.status_code == 200
+    user = registration.json()
+    assert user["id"]
+    assert "password" not in user
+    assert "password_hash" not in user
+
+    login = client.post(
+        "/api/auth/login",
+        json={"email": email, "password": password},
+    )
+    assert login.status_code == 200
+    assert login.json()["id"] == user["id"]
+
+    query = client.post(
+        "/api/ask",
+        json={
+            "question": "Show all employees",
+            "provider": "mock",
+            "user_id": user["id"],
+            "user_email": email,
+        },
+    )
+    assert query.status_code == 200
+
+    history = client.get(f"/api/history?user_id={user['id']}")
+    assert history.status_code == 200
+    history_data = history.json()
+    assert history_data["user"]["id"] == user["id"]
+    assert any(item["question"] == "Show all employees" for item in history_data["history"])
+    assert all("password" not in item and "password_hash" not in item for item in history_data["history"])
+
+
+def test_query_history_is_separate_between_users():
+    first_id = uuid4().hex
+    second_id = uuid4().hex
+    users = []
+
+    for user_id in (first_id, second_id):
+        response = client.post(
+            "/api/auth/register",
+            json={
+                "fullName": f"User {user_id}",
+                "email": f"{user_id}@example.com",
+                "password": "SeparatePass123!",
+            },
+        )
+        assert response.status_code == 200
+        users.append(response.json())
+
+    response = client.post(
+        "/api/ask",
+        json={
+            "question": "Show all employees",
+            "provider": "mock",
+            "user_id": users[0]["id"],
+            "user_email": users[0]["email"],
+        },
+    )
+    assert response.status_code == 200
+
+    first_history = client.get(f"/api/history?user_id={users[0]['id']}").json()["history"]
+    second_history = client.get(f"/api/history?user_id={users[1]['id']}").json()["history"]
+    assert any(item["question"] == "Show all employees" for item in first_history)
+    assert not any(item["question"] == "Show all employees" for item in second_history)
+
+
+def test_user_can_upload_and_query_personal_database():
+    unique_id = uuid4().hex
+    first_user = client.post(
+        "/api/auth/register",
+        json={
+            "fullName": f"Database Owner {unique_id}",
+            "email": f"db-owner-{unique_id}@example.com",
+            "password": "DatabasePass123!",
+        },
+    ).json()
+    second_user = client.post(
+        "/api/auth/register",
+        json={
+            "fullName": f"Other User {unique_id}",
+            "email": f"db-other-{unique_id}@example.com",
+            "password": "DatabasePass123!",
+        },
+    ).json()
+
+    database = sqlite3.connect(":memory:")
+    database.execute(
+        "CREATE TABLE employees (employee_id INTEGER, first_name TEXT, last_name TEXT, "
+        "department TEXT, designation TEXT, salary INTEGER)"
+    )
+    database.execute("INSERT INTO employees VALUES (999, 'Personal', 'User', 'Test', 'Owner', 1)")
+    database.commit()
+    backup_path = "tests_personal_database.db"
+    disk_database = sqlite3.connect(backup_path)
+    database.backup(disk_database)
+    disk_database.close()
+    database.close()
+
+    try:
+        with open(backup_path, "rb") as database_file:
+            upload = client.post(
+                "/api/databases/upload",
+                data={"user_id": str(first_user["id"])},
+                files={"file": ("personal.db", database_file, "application/octet-stream")},
+            )
+        assert upload.status_code == 200
+        personal_database = upload.json()
+
+        first_databases = client.get(f"/api/databases?user_id={first_user['id']}").json()["databases"]
+        second_databases = client.get(f"/api/databases?user_id={second_user['id']}").json()["databases"]
+        assert any(item["id"] == personal_database["id"] for item in first_databases)
+        assert not any(item["id"] == personal_database["id"] for item in second_databases)
+
+        schema = client.get(
+            f"/api/schema?database_id={personal_database['id']}&user_id={first_user['id']}"
+        )
+        assert schema.status_code == 200
+        assert "employees" in schema.json()["schema"]
+
+        query = client.post(
+            "/api/ask",
+            json={
+                "question": "Show all employees",
+                "provider": "mock",
+                "user_id": first_user["id"],
+                "user_email": first_user["email"],
+                "database_id": personal_database["id"],
+            },
+        )
+        assert query.status_code == 200
+        assert query.json()["rows"] == [{
+            "employee_id": 999,
+            "first_name": "Personal",
+            "last_name": "User",
+            "department": "Test",
+            "designation": "Owner",
+            "salary": 1,
+        }]
+
+        unauthorized_query = client.post(
+            "/api/ask",
+            json={
+                "question": "Show all employees",
+                "provider": "mock",
+                "user_id": second_user["id"],
+                "database_id": personal_database["id"],
+            },
+        )
+        assert unauthorized_query.status_code == 404
+        unauthorized_schema = client.get(
+            f"/api/schema?database_id={personal_database['id']}&user_id={second_user['id']}"
+        )
+        assert unauthorized_schema.status_code == 404
+    finally:
+        import os
+        os.remove(backup_path)

@@ -26,6 +26,7 @@ export function useSpeechRecognition({ defaultLang = 'en-IN' } = {}) {
       window.SpeechRecognition || window.webkitSpeechRecognition
 
     if (!SpeechRecognition) {
+      // eslint-disable-next-line react/set-state-in-effect
       setIsSupported(false)
       setError('Speech recognition is not supported in this browser.')
       return
@@ -216,3 +217,5 @@ export function useSpeechRecognition({ defaultLang = 'en-IN' } = {}) {
     setError,
   }
 }
+
+export default useSpeechRecognition

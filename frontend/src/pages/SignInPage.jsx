@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { loginUser, registerUser } from '../services/api.js'
 
 function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
   const [formData, setFormData] = useState({
@@ -11,6 +12,8 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [formError, setFormError] = useState('')
+  const [authMode, setAuthMode] = useState('login')
+  const isLoginMode = authMode === 'login'
 
   const passwordStrength = useMemo(() => {
     const value = formData.password
@@ -40,13 +43,13 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
     }))
   }
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
 
     const trimmedName = formData.fullName.trim()
     const trimmedEmail = formData.email.trim()
 
-    if (!trimmedName) {
+    if (!isLoginMode && !trimmedName) {
       setFormError('Please enter your full name.')
       return
     }
@@ -56,26 +59,35 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
       return
     }
 
-    if (formData.password.length < 8) {
+    if (formData.password.length < (isLoginMode ? 1 : 8)) {
       setFormError('Password must contain at least 8 characters.')
       return
     }
 
-    if (formData.password !== formData.confirmPassword) {
+    if (!isLoginMode && formData.password !== formData.confirmPassword) {
       setFormError('Passwords do not match.')
       return
     }
 
-    if (!formData.acceptedTerms) {
+    if (!isLoginMode && !formData.acceptedTerms) {
       setFormError('Please accept the terms and privacy policy to continue.')
       return
     }
 
     setFormError('')
-    onAccountCreated({
-      fullName: trimmedName,
-      email: trimmedEmail,
-    })
+    try {
+      const result = isLoginMode
+        ? await loginUser(trimmedEmail, formData.password)
+        : await registerUser(trimmedName, trimmedEmail, formData.password)
+      onAccountCreated({
+        id: result.id,
+        fullName: result.fullName || trimmedName || trimmedEmail,
+        email: result.email || trimmedEmail,
+      })
+    } catch (err) {
+      console.warn(`Backend ${isLoginMode ? 'login' : 'registration'} error:`, err)
+      setFormError(err.message || `Unable to ${isLoginMode ? 'sign in' : 'create account'}.`)
+    }
   }
 
   return (
@@ -113,8 +125,8 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
 
           <div className="auth-header">
             <span className="auth-tag">Smart • Secure • Simple</span>
-            <h1>Create your account</h1>
-            <p>Start your journey with us today and bring your workflows, metrics, and AI insights into one premium operating system.</p>
+            <h1>{isLoginMode ? 'Welcome back' : 'Create your account'}</h1>
+            <p>{isLoginMode ? 'Sign in to continue working with your saved queries and insights.' : 'Start your journey with us today and bring your workflows, metrics, and AI insights into one premium operating system.'}</p>
           </div>
 
           <div className="auth-social-row">
@@ -136,13 +148,13 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
           </div>
 
           <div className="auth-divider">
-            <span>or register with email</span>
+            <span>{isLoginMode ? 'or sign in with email' : 'or register with email'}</span>
           </div>
 
           <form className="auth-form" onSubmit={handleSubmit}>
             {formError && <div className="auth-error-box">{formError}</div>}
 
-            <div className="auth-field">
+            {!isLoginMode && <div className="auth-field">
               <label htmlFor="fullName">Full Name</label>
               <div className="input-wrap">
                 <span className="input-icon">◔</span>
@@ -155,7 +167,7 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
                   placeholder="Jane Doe"
                 />
               </div>
-            </div>
+            </div>}
 
             <div className="auth-field">
               <label htmlFor="email">Work Email</label>
@@ -174,7 +186,7 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
             </div>
 
             <div className="auth-field">
-              <label htmlFor="password">Create Password</label>
+              <label htmlFor="password">{isLoginMode ? 'Password' : 'Create Password'}</label>
               <div className="input-wrap">
                 <span className="input-icon">◌</span>
                 <input
@@ -195,7 +207,7 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
                 </button>
               </div>
 
-              <div className="strength-box">
+              {!isLoginMode && <div className="strength-box">
                 <div className="strength-head">
                   <span>Strength Rating</span>
                   <strong>{passwordStrength.label}</strong>
@@ -210,10 +222,10 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
                   <span>✓ Uppercase</span>
                   <span>✓ Symbol</span>
                 </div>
-              </div>
+              </div>}
             </div>
 
-            <div className="auth-field">
+            {!isLoginMode && <div className="auth-field">
               <label htmlFor="confirmPassword">Confirm Password</label>
               <div className="input-wrap">
                 <span className="input-icon">↻</span>
@@ -234,9 +246,9 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
                   {showConfirmPassword ? 'Hide' : 'Show'}
                 </button>
               </div>
-            </div>
+            </div>}
 
-            <label className="terms-row" htmlFor="acceptedTerms">
+            {!isLoginMode && <label className="terms-row" htmlFor="acceptedTerms">
               <input
                 id="acceptedTerms"
                 name="acceptedTerms"
@@ -247,17 +259,20 @@ function SignInPage({ onBackHome, theme, onToggleTheme, onAccountCreated }) {
               <span>
                 I agree to the <a href="#">Terms of Compute</a> and acknowledge the <a href="#">Privacy Protocol</a>.
               </span>
-            </label>
+            </label>}
 
             <button type="submit" className="auth-submit-button">
-              Create Account
+              {isLoginMode ? 'Sign In' : 'Create Account'}
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M5 12h14M13 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
 
             <p className="auth-switch-text">
-              Already have an account? <button type="button" onClick={onBackHome}>Sign in</button>
+              {isLoginMode ? 'New to QueryX?' : 'Already have an account?'}{' '}
+              <button type="button" onClick={() => { setAuthMode(isLoginMode ? 'register' : 'login'); setFormError('') }}>
+                {isLoginMode ? 'Create account' : 'Sign in'}
+              </button>
             </p>
           </form>
         </div>

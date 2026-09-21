@@ -1,16 +1,43 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import time
+import shutil
+import uuid
 from pathlib import Path
 import sqlite3
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from app.sql_validator import validate_sql
 from app.llm import get_llm
 from app.services import QueryService, SchemaService, ChartService, DatasetService
+from app.app_db import engine, SessionLocal, Base
+from app.models import User, QueryHistory, UserDatabase
+from sqlalchemy.orm import Session
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+from fastapi import Depends, Header, HTTPException, status
+import datetime
 
+# Ensure app.db tables (users, query_history) exist
+Base.metadata.create_all(bind=engine)
+
+# PBKDF2 avoids the bcrypt backend incompatibility on newer Python versions.
+# Keep bcrypt available so users created by older deployments can still log in.
+pwd_context = CryptContext(
+    schemes=["pbkdf2_sha256", "bcrypt"],
+    deprecated="auto",
+)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 app = FastAPI(title="QueryX API", version="1.0.0")
 
@@ -36,6 +63,8 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "database" / "company.db"
+USER_DATABASE_DIR = BASE_DIR / "database" / "user_databases"
+USER_DATABASE_DIR.mkdir(parents=True, exist_ok=True)
 
 # MODULE-LEVEL SERVICE INSTANCES
 
@@ -43,11 +72,23 @@ schema_service = SchemaService()
 chart_service = ChartService()
 dataset_service = DatasetService(DB_PATH)
 
-# REQUEST MODEL
+# REQUEST MODELS
+
+class UserSignupRequest(BaseModel):
+    fullName: str
+    email: str
+    password: str
+
+class UserLoginRequest(BaseModel):
+    email: str
+    password: str
 
 class QuestionRequest(BaseModel):
     question: str
     provider: str | None = None
+    user_email: str | None = None
+    user_id: int | None = None
+    database_id: int | str = "sample"
 
     @field_validator("question")
     @classmethod
@@ -72,17 +113,39 @@ class QueryResponse(BaseModel):
 
 # DATABASE CONNECTION
 
-def get_database_connection():
-    if not DB_PATH.exists():
-        raise FileNotFoundError(f"Database company.db not found at {DB_PATH}")
-    connection = sqlite3.connect(str(DB_PATH))
+def get_database_connection(db_path: Path = DB_PATH):
+    if not db_path.exists():
+        raise FileNotFoundError(f"Database not found at {db_path}")
+    connection = sqlite3.connect(str(db_path))
     connection.row_factory = sqlite3.Row
     return connection
 
 
+def resolve_database_path(database_id: int | str, user_id: int | None, db: Session) -> Path:
+    if database_id in ("sample", 0, None):
+        return DB_PATH
+
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Sign in to use a personal database")
+
+    try:
+        database_key = int(database_id)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail="Invalid database selection") from error
+
+    user_database = db.query(UserDatabase).filter(
+        UserDatabase.id == database_key,
+        UserDatabase.user_id == user_id,
+    ).first()
+    if not user_database:
+        raise HTTPException(status_code=404, detail="Database not found for this user")
+
+    return Path(user_database.file_path)
+
+
 # EXECUTE SQL
 
-def execute_sql(sql: str) -> dict:
+def execute_sql(sql: str, db_path: Path = DB_PATH) -> dict:
     is_valid, message = validate_sql(sql)
 
     if not is_valid:
@@ -91,7 +154,7 @@ def execute_sql(sql: str) -> dict:
             "error": message,
         }
 
-    connection = get_database_connection()
+    connection = get_database_connection(db_path)
     try:
         cursor = connection.execute(sql)
         rows = cursor.fetchall()
@@ -111,13 +174,14 @@ def execute_sql(sql: str) -> dict:
 
 # PROCESS QUESTION (END-TO-END PIPELINE)
 
-def process_question(question: str, provider: str | None = None) -> dict:
+def process_question(question: str, provider: str | None = None, db_path: Path = DB_PATH) -> dict:
     start_time = time.perf_counter()
 
     try:
         # Step 1: Initialize LLM and QueryService
         llm = get_llm(provider)
-        query_service = QueryService(llm=llm, schema_service=schema_service)
+        selected_schema_service = SchemaService(db_path)
+        query_service = QueryService(llm=llm, schema_service=selected_schema_service)
 
         # Step 2: Generate SQL from natural language
         generated_sql = query_service.generate_sql(question)
@@ -148,7 +212,7 @@ def process_question(question: str, provider: str | None = None) -> dict:
             }
 
         # Step 4: Execute SQL against Database
-        db_result = execute_sql(generated_sql)
+        db_result = execute_sql(generated_sql, db_path)
         if db_result["error"]:
             elapsed = (time.perf_counter() - start_time) * 1000
             return {
@@ -197,7 +261,7 @@ def process_question(question: str, provider: str | None = None) -> dict:
 
 # API ROUTES
 
-@app.post("/ask", response_model=QueryResponse)
+# Removed stray decorator; the correct endpoint is defined below as '/api/ask'
 @app.post("/api/upload")
 async def upload_dataset(file: UploadFile = File(...)):
     if not file.filename:
@@ -243,9 +307,165 @@ async def upload_dataset(file: UploadFile = File(...)):
         if temp_file:
             from pathlib import Path
             Path(temp_file).unlink(missing_ok=True)
-@app.post("/api/ask", response_model=QueryResponse)
-def ask_database(request: QuestionRequest):
-    result = process_question(request.question, request.provider)
+
+
+@app.get("/api/databases")
+def list_databases(user_id: int | None = None, db: Session = Depends(get_db)):
+    databases = [{"id": "sample", "name": "QueryX Sample Database", "type": "sample"}]
+    if user_id:
+        databases.extend(
+            {
+                "id": database.id,
+                "name": database.name,
+                "type": "personal",
+            }
+            for database in db.query(UserDatabase)
+            .filter(UserDatabase.user_id == user_id)
+            .order_by(UserDatabase.created_at.desc())
+            .all()
+        )
+    return {"databases": databases}
+
+
+@app.post("/api/databases/upload")
+async def upload_database(
+    file: UploadFile = File(...),
+    user_id: int = Form(...),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Please sign in again")
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".db", ".sqlite", ".sqlite3"}:
+        raise HTTPException(status_code=400, detail="Upload a SQLite database (.db, .sqlite, or .sqlite3)")
+
+    database_id = uuid.uuid4().hex
+    database_path = USER_DATABASE_DIR / f"user_{user.id}_{database_id}{suffix}"
+    with database_path.open("wb") as destination:
+        shutil.copyfileobj(file.file, destination)
+
+    try:
+        connection = get_database_connection(database_path)
+        table_count = connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchone()[0]
+        connection.close()
+        if table_count == 0:
+            raise ValueError("The uploaded database has no user tables")
+
+        record = UserDatabase(
+            user_id=user.id,
+            name=Path(file.filename).stem,
+            file_path=str(database_path),
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        return {"id": record.id, "name": record.name, "type": "personal"}
+    except Exception as error:
+        database_path.unlink(missing_ok=True)
+        if isinstance(error, ValueError):
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        raise
+# USER AUTHENTICATION & HISTORY ROUTES
+
+@app.post("/api/auth/register")
+def register_user(req: UserSignupRequest, db: Session = Depends(get_db)):
+    email = req.email.strip().lower()
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="User with this email already exists")
+
+    hashed_pw = pwd_context.hash(req.password)
+    new_user = User(
+        username=req.fullName.strip(),
+        email=email,
+        password_hash=hashed_pw
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {
+        "id": new_user.id,
+        "fullName": new_user.username,
+        "email": new_user.email,
+        "message": "User created successfully"
+    }
+
+@app.post("/api/auth/login")
+def login_user(req: UserLoginRequest, db: Session = Depends(get_db)):
+    email = req.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not pwd_context.verify(req.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    return {
+        "id": user.id,
+        "fullName": user.username,
+        "email": user.email,
+        "message": "Login successful"
+    }
+
+@app.get("/api/history")
+def get_query_history(
+    user_id: int | None = None,
+    user_email: str | None = None,
+    db: Session = Depends(get_db),
+):
+    if not user_id:
+        return {"history": []}
+
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        return {"history": []}
+
+    if user_email and user.email != user_email.strip().lower():
+        raise HTTPException(status_code=403, detail="User identity does not match")
+
+    records = db.query(QueryHistory).filter(QueryHistory.user_id == user.id).order_by(QueryHistory.created_at.desc()).limit(50).all()
+    return {
+        "user": {
+            "id": user.id,
+            "fullName": user.username,
+            "email": user.email,
+        },
+        "history": [
+            {
+                "id": r.id,
+                "question": r.question,
+                "answer": r.answer,
+                "generated_sql": r.generated_sql,
+                "created_at": r.created_at.isoformat() if r.created_at else None
+            }
+            for r in records
+        ]
+    }
+
+@app.post("/ask", response_model=QueryResponse)
+@app.post("/api/ask", response_model=QueryResponse)  # Main ask endpoint
+def ask_database(request: QuestionRequest, db: Session = Depends(get_db)):
+    selected_db_path = resolve_database_path(request.database_id, request.user_id, db)
+    result = process_question(request.question, request.provider, selected_db_path)
+
+    # Save history only for an existing persisted user; never store credentials here.
+    if request.user_id:
+        user = db.query(User).filter(User.id == request.user_id).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="Please sign in again")
+        if request.user_email and user.email != request.user_email.strip().lower():
+            raise HTTPException(status_code=403, detail="User identity does not match")
+
+        history_entry = QueryHistory(
+            user_id=user.id,
+            question=request.question,
+            answer=result.get("answer"),
+            generated_sql=result.get("generated_sql"),
+        )
+        db.add(history_entry)
+        db.commit()
 
     return {
         "question": request.question,
@@ -327,13 +547,20 @@ def employees_test():
 
 
 @app.get("/api/schema")
-def get_schema():
+def get_schema(
+    database_id: int | str = "sample",
+    user_id: int | None = None,
+    db: Session = Depends(get_db),
+):
     try:
-        schema = schema_service.get_schema()
+        selected_db_path = resolve_database_path(database_id, user_id, db)
+        schema = SchemaService(selected_db_path).get_schema()
         return {
             "schema": schema,
             "error": None,
         }
+    except HTTPException:
+        raise
     except Exception as error:
         return {
             "schema": {},

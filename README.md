@@ -99,7 +99,7 @@ The user accesses the application through the frontend (`http://localhost:5173`)
 
 ```powershell
 # From project root:
-.\.venv\Scripts\uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+.\env\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 # Or simply run the helper script:
 .\run-backend.bat   # or .\run-backend.ps1
@@ -144,7 +144,7 @@ Any question submitted in the workspace sends a request to `/api/ask` (proxied o
 Execute the complete backend test suite with pytest:
 
 ```powershell
-.\.venv\Scripts\pytest tests/ -v
+.\env\Scripts\python.exe -m pytest tests/ -v
 ```
 
 ---
